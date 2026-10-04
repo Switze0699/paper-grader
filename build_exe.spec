@@ -56,6 +56,13 @@ hiddenimports = [
     "openpyxl",
     "yaml",
     "dotenv",
+    # ⚠ 题库（2026-10-04/05）：exe 的入口是 main.py，它不import
+    #   import_questions.py，所以 PyInstaller 静态分析扫不到
+    #   core.qbank_parse（只有导入器在用）。这里手动补上，
+    #   免得哪天想在 exe 里做导入时才发现模块不存在。
+    #   core.qbank 本身会被 app/screens/setup.py import，已经自动带上。
+    "core.qbank",
+    "core.qbank_parse",
 ]
 
 # 把 flet 系列包的数据文件（Flutter 运行时等）全部带上

@@ -158,6 +158,70 @@ def main() -> None:
     report.render(app)
     check("能构建报告页", app.rendered is not None and len(app.rendered) >= 4)
 
+    # ---- 题库题的材料/评分说明显示（2026-10-05）----
+    print("\n[题库题 · 材料与评分说明]")
+    bank_q = Question(
+        subject="地理", topic="地表形态的塑造", max_score=6,
+        material="某地位于东南丘陵，基岩为花岗岩。",
+        stem="推测花岗岩的形成过程。",
+        note="只写出前两步的，总分不得超过 4 分。",
+        points=[RubricPoint(seq=1, text="岩浆侵入冷凝", score=2)],
+    )
+    app2 = StubApp()
+    app2.state["question"] = bank_q
+    setup.render(app2)
+    # 材料卡 + 评分说明卡 + 题面卡 + 细则卡… 至少5 个区块
+    check("首页能显示材料卡和评分说明卡",
+          app2.rendered is not None and len(app2.rendered) >= 5,
+          str(len(app2.rendered) if app2.rendered else 0))
+
+    app3 = StubApp()
+    app3.state["question"] = bank_q
+    app3.state["students"] = [Student(seq=1, ability="中等", answer="答")]
+    app3.state["teacher"] = {}
+    app3.state["paper_id"] = None
+    grading.render(app3)
+    check("批改页能构建（含评分说明卡）",
+          app3.rendered is not None and len(app3.rendered) >= 4)
+
+    # ---- 悬空存档：题目行被删后不能崩（2026-10-05实测踩过）----
+    print("\n[题目被删的存档 · 不能崩]")
+    check("max_score 是 None 时历史页也能显示",
+          history._score_text(None) == "—", history._score_text(None))
+    check("max_score 是数字时正常显示",
+          history._score_text(6) == "6 分"
+          and history._score_text(6.0) == "6 分", history._score_text(6))
+    # 造一份"题目行已被删、但 papers 存档还在"的记录，验证 load_paper 不崩。
+    # ⚠ 顺序很重要：必须先只删 questions 那一行、**留着papers 和映射**，
+    #   这才是"题库重导后旧题消失、存档还在"的真实状态。
+    #   （反过来先删映射，题目行还在，就不是那个场景了）
+    import storage.db as _db
+    _conn = _db.get_conn()
+    _cur = _conn.execute(
+        "INSERT INTO questions (subject, topic, stem, max_score, created_at)"
+        " VALUES ('地理','悬空测试','T',4,'x')")
+    _dead_qid = _cur.lastrowid
+    _cur = _conn.execute(
+        "INSERT INTO papers (question_id, created_at, repeats, status)"
+        " VALUES (?,'2026-10-05',1,'done')", (_dead_qid,))
+    _dead_pid = _cur.lastrowid
+    # 把题目行删掉（模拟题库重导），只留 papers 存档
+    _conn.execute("DELETE FROM questions WHERE id=?", (_dead_qid,))
+    _conn.commit()
+    _conn.close()
+
+    _paper = repo.load_paper(_dead_pid)
+    check("题目被删的存档仍能打开（用占位题）",
+          _paper is not None and _paper["question"] is not None,
+          "load_paper 返回了 None")
+    check("占位题带得动（满分 0、不崩）",
+          _paper is not None and _paper["question"].max_score == 0)
+    # 清理：别把测试数据留在用户库里
+    _conn = _db.get_conn()
+    _conn.execute("DELETE FROM papers WHERE id=?", (_dead_pid,))
+    _conn.commit()
+    _conn.close()
+
     # ---- 耗时统计（2026-10-04 新增）----
     from core.timing import (Stopwatch, fmt_duration, get_api_calls,
                              note_api_call, reset_api_calls)
