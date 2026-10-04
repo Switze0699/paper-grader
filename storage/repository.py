@@ -288,3 +288,58 @@ def list_papers(limit: int = 50) -> List[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 题库（2026-10-04 新增，配套 import_questions.py）
+# ---------------------------------------------------------------------------
+# 抽题、轮次重置这些逻辑放在 core/qbank.py，这里只管存和取。
+
+def save_bank_file(filename: str, raw_text: str, sha1: str,
+                   parse_status: str, qid: int, analysis: str = "",
+                   has_answer: bool = True, max_score_source: str = "",
+                   warnings: str = "") -> int:
+    """记录一个 txt 已经导入过（按文件名判重）。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO qbank_files (filename, raw_text, sha1, imported_at,"
+            " parse_status, qid, analysis, has_answer, max_score_source, warnings)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(filename) DO UPDATE SET"
+            "   raw_text=excluded.raw_text, sha1=excluded.sha1,"
+            "   imported_at=excluded.imported_at, parse_status=excluded.parse_status,"
+            "   qid=excluded.qid, analysis=excluded.analysis,"
+            "   has_answer=excluded.has_answer,"
+            "   max_score_source=excluded.max_score_source, warnings=excluded.warnings",
+            (filename, raw_text, sha1, _now(), parse_status, qid, analysis,
+             1 if has_answer else 0, max_score_source, warnings),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def get_file_imported_qid(filename: str):
+    """这个文件之前导过吗？导过就返回 qid，没导过返回 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT qid FROM qbank_files WHERE filename=?", (filename,)
+        ).fetchone()
+        return row["qid"] if row else None
+    finally:
+        conn.close()
+
+
+def list_bank_files() -> List[dict]:
+    """题库里所有已导入的题目（按导入时间倒序）。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM qbank_files ORDER BY id DESC"
+        ).fetchall()
+        return [{k: r[k] for k in r.keys()} for r in rows]
+    finally:
+        conn.close()

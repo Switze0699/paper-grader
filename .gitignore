@@ -129,3 +129,9 @@ assets/index.html
 *.bat 中的中文名 → 改用明确路径
 /启动网页版.bat
 /启动批改.bat
+
+# ---- 题库开发过程中的临时/回滚文件 ----
+prompts_before_qbank/
+app_before_qbank/
+_test_local.py
+回滚题库开发.bat

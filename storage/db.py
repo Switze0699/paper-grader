@@ -85,6 +85,49 @@ CREATE TABLE IF NOT EXISTS teacher_grades (
     graded_at TEXT,
     UNIQUE(paper_id, student_seq)
 );
+
+-- ===========================================================================
+-- 题库（2026-10-04 新增）
+--
+-- 以前题目是 AI 随机出的，现在改成"教师自己维护 题库/*.txt，导入进来"。
+--
+-- ⚠ 为什么单独建表、不往 questions 表加字段：
+--   这套逻辑是新的，万一有问题，把这三张表 DROP 掉就回到现在的状态，
+--   你已���的 42 份存档（questions / papers / ai_scores…）完全不受影响。
+-- ===========================================================================
+
+-- ① 导入过的 txt 原始文件。filename 唯一 → 靠它判重、跳过重复导入
+CREATE TABLE IF NOT EXISTS qbank_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT UNIQUE NOT NULL,
+    raw_text TEXT,
+    sha1 TEXT,
+    imported_at TEXT,
+    parse_status TEXT,          -- ok / need_review
+    qid INTEGER,                -- 存进 questions 后的 id
+    analysis TEXT,              -- 自动生成的题目解析
+    has_answer INTEGER,         -- 原文里有没有答案
+    max_score_source TEXT,      -- written（原文写了）/ inferred（点数×2推断）/ fallback
+    warnings TEXT
+);
+
+-- ② 练习轮次：保证每道题都抽到一次，才允许重开下一轮
+CREATE TABLE IF NOT EXISTS qbank_rounds (
+    round_no INTEGER PRIMARY KEY,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+-- ③ 抽题记录。UNIQUE(qid, round_no) 是关键：
+--    一轮之内同一道题只能被抽到一次
+CREATE TABLE IF NOT EXISTS qbank_practice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qid INTEGER NOT NULL,
+    round_no INTEGER NOT NULL,
+    paper_id INTEGER,
+    practiced_at TEXT,
+    UNIQUE(qid, round_no)
+);
 """
 
 
