@@ -1,0 +1,10 @@
+【题目】
+{question}
+
+【评分细则 · 满分 {max_score} 分】
+{rubric}
+
+【学生答案】
+{answer}
+
+请严格依据评分细则逐点判定，输出 JSON。

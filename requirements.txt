@@ -1,0 +1,19 @@
+# 打包手机 APK 时 Flet 会读这个文件。
+# ⚠ 绝对不要用 `pip freeze` 生成它——那会把一堆在安卓上装不上的包也写进来。
+#   只写这个软件真正直接用到的几个，而且每个都要能在安卓上装。
+#
+#   · flet            界面框架（自带安卓运行时）
+#   · httpx           调智谱 GLM（纯 Python）
+#   · python-dotenv   读 .env（纯 Python）
+#   · PyYAML          读 config.yaml（带 C 扩展，但有纯 Python 回退可用）
+#   · openpyxl        导出 Excel（纯 Python）
+#   · segno           生成二维码（纯 Python，手机端"手机访问"页要用）
+#
+# ⚠ 桌面上还需要 flet-desktop，但**安卓不支持**它，所以这里不写。
+#   桌面的 exe 由 PyInstaller 打包、不看这个文件，完全不受影响。
+flet==0.86.5
+httpx>=0.28
+python-dotenv>=1.0
+PyYAML>=6.0
+openpyxl>=3.1
+segno>=1.6

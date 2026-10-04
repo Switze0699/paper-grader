@@ -1,0 +1,131 @@
+# ============================================================================
+# ⚠⚠⚠ 最重要的一条：绝不能上传 API 密钥 ⚠⚠⚠
+# .env 里存着你的智谱 API Key（形如 xxxx.yyyy）。
+# 一旦提交进 git，密钥就永久留在历史记录里了 —— 就算后来删掉文件，
+# GitHub 上仍然能翻出来，等于密钥已经泄露。
+# 规则：只提交 .env.example（里面是占位符，没有真值）。
+# ============================================================================
+.env
+.env.*
+!.env.example
+
+# 密钥的兜底：万一以后有人把密钥写在别的地方
+api_key.txt
+*.key
+*.pem
+secrets/
+credentials/
+
+# ---- Python 虚拟环境（本机专用，1.2 GB，上传没意义）----
+.venv/
+venv/
+env/
+env.bak/
+ENV/
+
+# ---- Python 缓存 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+.installed.cfg
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 打包产物（exe 135 MB，GitHub 单文件上限 100 MB，绝对不能传）----
+*.exe
+*.dll
+*.so
+*.app
+build_new/
+dist_new/
+build_v2/
+dist_v2/
+build_v3/
+dist_v3/
+*.spec.bak
+# ⚠ 注意：build_exe.spec 本身要提交（打包脚本），上面只忽略它的备份
+
+# ---- 运行数据（每个老师的数据不一样，不该互相覆盖）----
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---- 导出结果（学生答卷、批改明细、Excel，属于个人数据）----
+导出/
+*.xlsx
+!模板/*.xlsx
+export/
+
+# ---- 日志 ----
+logs/
+*.log
+
+# ---- 备份目录（我为了回滚做的，用户不需要看到）----
+prompts_before_apk/
+prompts_v1_stable/
+prompts_v1_copypaste/
+prompts_current_final/
+prompts_before_restore/
+app_before_restore/
+restore_backup.bat
+恢复网页版.bat
+
+# ---- AI 工作区（我的记忆文件，跟项目无关）----
+.workbuddy/
+
+# ---- 旧版本存档 ----
+legacy/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# ---- Flet 运行时自动生成的目录 ----
+.flet/
+
+# ---- 打包/工具临时文件 ----
+_chromeprofile*/
+_timing_preview.html
+_preview.html
+_fonts/
+*.log.bak
+flutter_init.log
+build_apk.log
+
+# ---- Python 打包工具的缓存 ----
+__pycache__/
+.mypy_cache/
+
+# ---- 字体：提交进仓库（合计 30 MB）----
+# 理由：答卷的手写体是本项目的核心特色（assets/HongLeiZhuoShu.ttf「鸿雷拙书」，
+# 免费商用授权）。不提交的话，别人 clone 下来字体缺失，答卷会变成普通印刷体。
+# 30 MB 对 GitHub 完全不算大（单文件上限 100 MB），值得换"clone 即可用"。
+# assets/*.ttf  ← 故意不忽略
+
+# ---- 中文名快捷入口（本地双击用，不上传）----
+# 真正的脚本是 start_web.bat / start_desktop.bat（英文名，GitHub 链接可读）。
+# 这两个中文名副本只是为了你/老师能一眼认出双击哪个，入库没意义。
+启动网页版.bat
+启动批改.bat
+
+# ---- 网页版运行时生成的加载页（app/server.py 每次启动会重装）----
+assets/index.html
+
+# ⚠ 上面的中文名规则如果因为编码问题没生效，用这两条兜底（通配更稳）：
+*.bat 中的中文名 → 改用明确路径
+/启动网页版.bat
+/启动批改.bat
