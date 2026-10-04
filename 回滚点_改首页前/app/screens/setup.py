@@ -8,7 +8,6 @@ import time
 import flet as ft
 
 from app import theme
-from core import qbank
 from core.models import RubricPoint
 from core.pipeline import build_class, build_question, persist, run_grading
 from core.timing import (Stopwatch, get_api_calls, reset_api_calls,
@@ -110,90 +109,20 @@ def _no_key_card(app) -> ft.Container:
     )
 
 
-def _start_practice(app) -> None:
-    """从题库随机抽一道题，填进 st['question']，然后刷新首页。
-
-    抽题失败（题库空）时给一句人话提示，不弹技术性报错。
-    """
-    st = app.state
-    try:
-        picked = qbank.pick()
-    except Exception as e:  # noqa: BLE001
-        log.exception("抽题失败")
-        app.show_error(f"抽题失败：{e}")
-        return
-
-    if not picked.ok:
-        app.show_error(picked.reason or "题库里没有可用题目。")
-        return
-
-    q = picked.question
-    st["question"] = q
-    st["_stem_field"] = None          # 让render 重建
-    st["_point_fields"] = []
-    st["_qbank_qid"] = q.id
-    st["_qbank_round"] = picked.round_no
-    # 计时：题库抽题是本地操作，不花时间，但要归零，
-    # 否则会沿用上一轮"AI 出题"的耗时，让报告里的统计对不上。
-    st["_t_question"] = 0.0
-    st["_q_calls"] = 0
-    _refresh(app)
-
-
 def _idle_card(app) -> ft.Container:
-    """首页主界面。
-
-    ★ 主入口是「开始练习」——从你自己的题库随机抽题。
-      「让 AI 出一道新题」保留成下面的次要按钮：题库跑光了、或者临时想
-      练个新题时有个后路（它会花一次 API 调用出一套新题+细则）。
-    """
-    p = qbank.progress()
-    total = p["total"]
-
-    if total <= 0:
-        body = [
-            ft.Text("题库还是空的", size=17, color=theme.TEXT,
-                    weight=ft.FontWeight.BOLD),
-            ft.Text(
-                "把试题的 .txt 放进项目里的「题库」文件夹，\n"
-                "然后运行 import_questions.py 导入。\n"
-                "题库里的题会按轮次随机抽给你，一轮练完自动从头再来。",
-                size=14, color=theme.SUB,
-            ),
-        ]
-    else:
-        if p["finished"]:
-            prog = f"第 {p['round_no']} 轮已全部练完（{p['done']}/{p['total']}）。\n下一题会自动开新一轮。"
-        else:
-            prog = (f"题库共 {p['total']} 道题　·　"
-                    f"第 {p['round_no']} 轮已练 {p['done']} 道，"
-                    f"还剩 {p['remaining']} 道")
-        body = [
-            ft.Text("准备好了吗？", size=17, color=theme.TEXT,
-                    weight=ft.FontWeight.BOLD),
-            ft.Text(prog, size=14, color=theme.SUB),
-            ft.Row(
-                [theme.button("开始练习",
-                              lambda e=None: _start_practice(app))],
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            ft.Text(
-                "抽到的题会连材料、设问、评分细则一起给你，\n"
-                "你核对细则后就能生成学生答卷。",
-                size=12, color=theme.MUTED,
-            ),
-        ]
-
     return theme.card(
         ft.Column(
             [
-                *body,
-                ft.Divider(height=1, color=theme.BORDER),
-                # 次要入口：题库跑光了/想练新题时的后路
+                ft.Text("准备好了吗？", size=17, color=theme.TEXT,
+                        weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "点击下面的按钮，AI 会出一道高中地理综合题，\n"
+                    "并起草一份评分细则。细则出来后你可以逐条修改，确认无误再开始。",
+                    size=14, color=theme.SUB,
+                ),
                 ft.Row(
-                    [theme.button("让 AI 出一道新题（备用）",
-                                  lambda e=None: app.page.run_task(_do_question, app),
-                                  bgcolor=theme.SLATE)],
+                    [theme.button("让 AI 出一道新题",
+                                  lambda e=None: app.page.run_task(_do_question, app))],
                     alignment=ft.MainAxisAlignment.CENTER,
                 ),
             ],
@@ -234,29 +163,15 @@ def _material_card(app) -> ft.Container:
     )
 
 
-def _switch_question(app) -> None:
-    """「换一道题」。
-
-    题库来的题 → 换下一道题库题（本地，免费）。
-    AI 出的题 → 换一道 AI 新题（这本来就是要花 API 的）。
-    """
-    if app.state.get("_qbank_qid"):
-        _start_practice(app)
-    else:
-        app.page.run_task(_do_question, app)
-
-
 def _question_card(app, stem_field: ft.TextField) -> ft.Container:
-    from_bank = bool(app.state.get("_qbank_qid"))
-    btn_text = "换一道题库里的题" if from_bank else "换一道题"
     return theme.card(
         ft.Column(
             [
                 theme.label("【题目】可以直接修改"),
                 stem_field,
                 ft.Row(
-                    [theme.button(btn_text,
-                                  lambda e=None: _switch_question(app),
+                    [theme.button("换一道题",
+                                  lambda e=None: app.page.run_task(_do_question, app),
                                   bgcolor=theme.SLATE)],
                     spacing=8,
                 ),
@@ -457,10 +372,6 @@ async def _do_question(app) -> None:
     st["_t_question"] = q_secs
     st["_q_calls"] = q_calls
     st["question"] = q
-    # ⚠ 清掉题库标记：这是 AI 新出的题，不该走"更新已有题"那条路，
-    #   也不该被"换一道题"当成题库题来抽。
-    st["_qbank_qid"] = None
-    st["_qbank_round"] = None
     st["_stem_field"] = ft.TextField(value=q.stem, multiline=True, expand=True,
                                      text_size=15, min_lines=2, max_lines=6)
     _refresh(app)
@@ -538,10 +449,6 @@ async def _do_pipeline(app) -> None:
         api_calls = (st.get("_q_calls") or 0) + (get_api_calls() - calls_base)
         paper_id = persist(q, students, ai, st["repeats"],
                            timing=info, api_calls=api_calls)
-        # 题库来的题：把这次练习和存档号对上（报告/历史里能溯源）
-        if st.get("_qbank_qid"):
-            qbank.link_paper(st["_qbank_qid"], st.get("_qbank_round") or 1,
-                             paper_id)
         log.info("本次批改耗时：%s", timing_summary_line(info, api_calls,
                                                        len(students)))
         st["timing"] = info

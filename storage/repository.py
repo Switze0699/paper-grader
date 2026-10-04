@@ -37,6 +37,34 @@ def save_question(q: Question) -> int:
         conn.close()
 
 
+def update_question(qid: int, topic: str, stem: str, max_score: float,
+                    points: List[RubricPoint]) -> None:
+    """更新一道**已经存在**的题（题库功能，2026-10-04）。
+
+    为什么需要它：以前每道题都是 AI 现出的、现插的，不存在"改一道已有的题"
+    这件事。现在题目来自题库、导入时就已经在库里了，练习时教师又可能
+    在首页改题面、改采分点 —— 这些改动得存回去。
+
+    采分点是**整份替换**（先删后插），不做逐条 diff：
+    教师的操作就是"增删改某几条"，diff 逻辑反而容易出边界问题。
+    """
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE questions SET topic=?, stem=?, max_score=? WHERE id=?",
+            (topic, stem, float(max_score), int(qid)),
+        )
+        conn.execute("DELETE FROM rubric_points WHERE question_id=?", (int(qid),))
+        conn.executemany(
+            "INSERT INTO rubric_points (question_id, seq, text, score)"
+            " VALUES (?,?,?,?)",
+            [(int(qid), p.seq, p.text, float(p.score)) for p in points],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def create_paper(question_id: int, repeats: int) -> int:
     conn = get_conn()
     try:

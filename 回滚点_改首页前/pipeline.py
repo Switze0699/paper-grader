@@ -70,28 +70,6 @@ async def run_grading(
         await client.aclose()
 
 
-def _save_or_reuse_question(question: Question) -> int:
-    """题目已存在就更新，不存在才新建。返回 questions.id。
-
-    题库来的题带着 id（导入时就写进库了），走"更新"这条路：
-      · 题面改了（教师在首页编辑过）→ 同步过去
-      · 采分点改了（教师核对后增删过）→ 整份替换
-    ⚠ 存的是 stem（设问），**不是** full_stem()：
-      材料在 qbank_files 里，重复写进 stem 会让材料出现两份。
-    """
-    if not question.id:
-        return repo.save_question(question)
-
-    repo.update_question(
-        question.id,
-        topic=question.topic,
-        stem=question.stem,
-        max_score=question.max_score,
-        points=question.points,
-    )
-    return int(question.id)
-
-
 def persist(
     question: Question,
     students: List[Student],
@@ -104,15 +82,8 @@ def persist(
 
     timing / api_calls 是 2026-10-04 加的耗时统计（可省略）：
         timing = {"question": 12.3, "answer": 65.0, "grade": 150.2, "total": 228.0}
-
-    ⚠ 2026-10-04（题库功能）：题目已经存在就别再插一份。
-      以前题目都是 AI 现出的，每道都是新的，直接 INSERT 没问题。
-      现在题目来自题库、已经躺在 questions 表里了（question.id 不为None），
-      再插一次会让同一道题在库里变成好几个 qid —— 抽题记录会指向旧的那些，
-      历史记录也会越滚越多、同一道题出现好几遍。
-      所以：带id 的直接复用，只把改过的题面/采分点同步过去。
     """
-    qid = _save_or_reuse_question(question)
+    qid = repo.save_question(question)
     paper_id = repo.create_paper(qid, repeats)
     repo.save_students(paper_id, students)
     repo.save_ai_scores(paper_id, ai_map)

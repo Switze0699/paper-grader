@@ -22,6 +22,10 @@ def _open(app, paper_id: int) -> None:
     st["repeats"] = paper["repeats"]
     st["_stem_field"] = None
     st.pop("_point_fields", None)
+    # 这份存档已经存在了，别再当"刚抽的题库题"处理
+    # （否则教师从历史进来后点"换一道题"，行为会不对）
+    st["_qbank_qid"] = None
+    st["_qbank_round"] = None
 
     # 定位到第一份还没判过的答卷
     idx = 0
