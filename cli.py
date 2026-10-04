@@ -58,7 +58,7 @@ async def main_async(args) -> None:
     reset_api_calls()
     q = await build_question(cfg, key)
     sw.mark("question")
-    print(f"题目：{q.stem}")
+    print(f"题目：{q.full_stem()}")   # ⚠ 带材料
     print(f"主题：{q.topic}　满分：{q.max_score:g}")
     print("评分细则：")
     for p in q.points:

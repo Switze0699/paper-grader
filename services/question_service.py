@@ -168,8 +168,16 @@ def _tail_of(point_text: str) -> str:
     return point_text
 
 
-def _material_of(stem: str) -> str:
-    """从题面里切出【材料】部分（设问不算）。"""
+def _material_of(question: Question) -> str:
+    """取出这道题的材料部分（设问不算）。
+
+    ⚠ 2026-10-04：题库来的题材料在 question.material 里（不在 stem 里），
+       所以先看 material；没有再退回从前那种"从 stem 里切"的老算法
+       （AI 随机出题时代材料就写在 stem 里）。
+    """
+    if (question.material or "").strip():
+        return question.material
+    stem = question.stem or ""
     for mark in _ASK_MARKS:
         if mark in stem:
             return stem.split(mark, 1)[0]
@@ -183,7 +191,7 @@ def rubric_leak_problems(question: Question, min_run: int = LEAK_MIN_RUN) -> Lis
     """
     from core.quality import longest_common
 
-    material = _material_of(question.stem or "")
+    material = _material_of(question)
     if not material.strip():
         return []
 

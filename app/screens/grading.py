@@ -24,10 +24,17 @@ def _rubric_small(app) -> ft.Container:
 
 
 def _question_small(app) -> ft.Container:
+    """盲评页的题面卡。
+
+    ⚠ 2026-10-04：用 full_stem()，题库来的题必须显示材料。
+       教师看不到材料就没法判断学生有没有点出材料里的条件。
+       （AI 随机出题的老题 material 为空，显示与从前完全一样。）
+    """
     q = app.state["question"]
     return theme.card(
         ft.Column(
-            [theme.label("【题目】"), ft.Text(q.stem, size=14, color=theme.TEXT)],
+            [theme.label("【题目】"),
+             ft.Text(q.full_stem(), size=14, color=theme.TEXT)],
             spacing=8,
         ),
         padding=14,

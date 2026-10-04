@@ -33,7 +33,12 @@ def _build_prompts(cfg: dict, question: Question, answer: str) -> tuple:
     )
     user = fill(
         load_prompt("grading_user.txt"),
-        question=question.stem,
+        # ⚠ 2026-10-04 必须用 full_stem()，不能用 stem：
+        #   阅卷的判据是"这一点【条件／现象】有没有点出来"，
+        #   而条件／现象就出自材料。题库来的题材料不在 stem 里，
+        #   只发 stem 的话阅卷官看不到材料 → 判分必然出错。
+        #   AI 随机出题的老题 material 为空，full_stem() 原样返回 stem，行为不变。
+        question=question.full_stem(),
         max_score=f"{question.max_score:g}",
         rubric=question.rubric_text(),
         answer=answer or "（该生未作答）",

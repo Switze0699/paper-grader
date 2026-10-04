@@ -1117,6 +1117,68 @@ def test_material_leak_guard():
     check("阈值是 10 字（专有名词撞车不会误伤）", LEAK_MIN_RUN == 10, str(LEAK_MIN_RUN))
 
 
+def test_material_reaches_everyone():
+    """★ 题库来的题，材料必须送到每一个需要它的人手里。
+
+    背景（2026-10-04 用户验收时抓出来的坑）：
+      题库 txt 里"材料"和"设问"是分开两段的，材料存在 qbank_files 里，
+      不在 stem 里。而生成答卷、阅卷、教师盲评、Excel 导出全都只发 stem ——
+      于是【学生看不到材料】（凭空编答案）、【阅卷官看不到材料】
+      （判分依据"条件／现象有没有点出来"直接失效）、【教师看不到材料】。
+      修法是这些地方一律改用 full_stem()。
+
+    这条测试就是防止将来有人"顺手"改回question.stem。
+    """
+    print("\n[题库 · 材料送达全链路]")
+
+    q = Question(
+        subject="地理", topic="地表形态的塑造", max_score=6,
+        material="黑排角岩滩位于广东省东部海岸带，基岩岩性为流纹岩。",
+        stem="推测流纹岩的形成过程。",
+        points=[RubricPoint(seq=1, text="岩浆沿断裂带喷出地表", score=2)],
+    )
+    full = q.full_stem()
+    check("full_stem() = 材料 + 设问",
+          full == q.material + "\n\n" + q.stem, repr(full))
+    check("full_stem() 里有材料", "流纹岩" in full, repr(full[:40]))
+
+    # AI 随机出题时代的老存档：material 为空，full_stem() 必须原样返回 stem
+    old = Question(
+        subject="地理", topic="测试", max_score=8, stem="【材料】某河段位于湿润山区。",
+        points=[RubricPoint(seq=1, text="降水丰富", score=2)],
+    )
+    check("老存档（material 为空）full_stem() == stem，不受影响",
+          old.full_stem() == old.stem, repr(old.full_stem()))
+
+    # 真正发提示词的地方，必须用的是 full_stem() 而不是 stem
+    import inspect
+
+    from services import answer_service, grading_service
+    for mod, fn in ((answer_service, "_gen_one"),
+                    (answer_service, "_fix_answer"),
+                    (grading_service, "_build_prompts")):
+        src = inspect.getsource(getattr(mod, fn))
+        check(f"{mod.__name__.split('.')[-1]}.{fn}() 用 full_stem() 发题面",
+              "full_stem()" in src and "question.stem" not in src,
+              "还在用裸 stem")
+
+    # 界面和导出
+    from app.screens import grading as grading_ui
+    from storage import export as export_mod
+    check("教师盲评页用 full_stem() 显示题面",
+          "full_stem()" in inspect.getsource(grading_ui._question_small),
+          "还在用裸 stem")
+    check("Excel 导出用 full_stem()", "full_stem()" in inspect.getsource(export_mod),
+          "还在用裸 stem")
+
+    # 答案泄漏闸门要读 material（题库题的材料不在 stem 里）
+    from services.question_service import _material_of
+    check("答案泄漏闸门优先读 material",
+          _material_of(q) == q.material, repr(_material_of(q)))
+    check("老题仍从 stem 里切材料",
+          _material_of(old) == "【材料】某河段位于湿润山区。", repr(_material_of(old)))
+
+
 def main() -> None:
     print("=" * 46)
     print(" 批改模拟器 · 核心逻辑自测")
@@ -1135,6 +1197,7 @@ def main() -> None:
     test_question_normalize()
     test_spare_points_do_not_inflate()
     test_material_leak_guard()
+    test_material_reaches_everyone()
     print("\n" + "=" * 46)
     if FAILED:
         print(f" 有 {len(FAILED)} 项未通过：")

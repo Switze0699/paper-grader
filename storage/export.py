@@ -40,7 +40,7 @@ def export_excel(paper: dict) -> Path:
     # ---- 表一：总览 ----
     ws = wb.active
     ws.title = "总览"
-    ws.append(["题目", question.stem])
+    ws.append(["题目", question.full_stem()])   # ⚠ 带材料，别用 stem
     ws.append(["主题", question.topic])
     ws.append(["满分", question.max_score])
     ws.append(["生成时间", paper.get("created_at", "")])

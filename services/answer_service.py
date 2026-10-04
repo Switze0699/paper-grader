@@ -71,7 +71,11 @@ async def _gen_one(
     system = fill(load_prompt("answer_system.txt"), subject=question.subject)
     user = fill(
         load_prompt("answer_user.txt"),
-        question=question.stem,
+        # ⚠ 2026-10-04 必须用 full_stem()，不能用 stem：
+        #   题库来的题，"材料"和"设问"是分开两段（材料存在 qbank_files 里），
+        #   只发 stem 的话学生**看不到材料**，答卷必然凭空编。
+        #   AI 随机出题的老题 material 为空，full_stem() 原样返回 stem，行为不变。
+        question=question.full_stem(),
         max_score=f"{question.max_score:g}",
         student_block=build_student_block(question, plan),
     )
@@ -141,7 +145,7 @@ async def _fix_answer(
     system = fill(load_prompt("answer_system.txt"), subject=question.subject)
     user = fill(
         load_prompt("answer_fix.txt"),
-        question=question.stem,
+        question=question.full_stem(),   # ⚠ 同上：必须带材料
         answer=answer,
         role=student_role(plan.ability, plan.style),
         ability=plan.ability,

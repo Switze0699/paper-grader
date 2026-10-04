@@ -134,6 +134,35 @@ def _idle_card(app) -> ft.Container:
     )
 
 
+def _material_card(app) -> ft.Container:
+    """题库来的题，材料单独显示成一张只读卡片。
+
+    ⚠ 2026-10-04 为什么材料不塞进下面的编辑框：
+      那个框回写时是整体赋给 q.stem 的（见 _sync_fields）。
+      一旦把"材料 + 设问"一起显示进去，用户随便改一个字再保存，
+      材料就被并进 stem 里了 —— 再刷新一次，材料会重复出现。
+      所以：材料只读、单独一张卡；要改材料就改 题库/*.txt 再重新导入。
+      AI 随机出题的老题 material 为空，这张卡整个不显示。
+    """
+    q = app.state.get("question")
+    if q is None or not (q.material or "").strip():
+        return ft.Container()          # 空容器 = 不占位置、不显示
+    return theme.card(
+        ft.Column(
+            [
+                theme.label("【材料】来自题库，修改请改 题库 里的 txt 后重新导入"),
+                ft.Container(
+                    content=ft.Text(q.material, size=14, color=theme.TEXT,
+                                    selectable=True),
+                    width=999999,
+                ),
+            ],
+            spacing=8,
+        ),
+        padding=14,
+    )
+
+
 def _question_card(app, stem_field: ft.TextField) -> ft.Container:
     return theme.card(
         ft.Column(
@@ -461,6 +490,7 @@ def render(app) -> None:
         return
     controls = [
         _header(app),
+        _material_card(app),
         _question_card(app, st["_stem_field"]),
         _rubric_card(app, st["_point_fields"]),
         _repeat_card(app),
