@@ -1,6 +1,6 @@
 【题目】
 {question}
-
+{note_block}
 【评分细则 · 满分 {max_score} 分】
 {rubric}
 

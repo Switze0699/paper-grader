@@ -186,6 +186,9 @@ def print_check(name: str, pf, rows: List[Dict[str, Any]]) -> None:
         print(f"│     设问：{r['stem']}")
         for p in r["points"]:
             print(f"│     {p['seq']}. {p['text']}  —— {p['score']:g} 分")
+        # 【评分说明】= 教师写的判分硬约束，必须让你在导入时就看到它有没有被读到
+        if r.get("note"):
+            print(f"│     ★ 评分说明：{r['note']}")
         if not n:
             print(f"│     ⚠ 没有采分点！原文里没有【答案{r['sub_no']}】吗？")
     if pf.analysis:
@@ -198,6 +201,24 @@ def print_check(name: str, pf, rows: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 # 入库
 # ---------------------------------------------------------------------------
+
+def _drop_bank_file_row(file_id: int) -> bool:
+    """删掉 qbank_files 里的一行（文件被改名后重导时用）。
+
+    qbank_files.filename 是 UNIQUE 的：清完题目如果不删这一行，
+    下次再判重还会撞上这个旧文件名。返回是否真的删了。
+    """
+    from storage.db import get_conn
+
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM qbank_files WHERE id=?",
+                           (int(file_id),))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
 
 def save_rows(name: str, raw_text: str, rows: List[Dict[str, Any]],
               topic: str, analysis: str, has_answer: bool,
@@ -227,7 +248,8 @@ def save_rows(name: str, raw_text: str, rows: List[Dict[str, Any]],
         qid = repo.save_question(q)
         repo.link_bank_question(file_id, int(r["sub_no"]), qid,
                                 sub_stem=r["stem"],
-                                sub_score=float(r["max_score"]))
+                                sub_score=float(r["max_score"]),
+                                sub_note=r.get("note", ""))
         qids.append(qid)
     return qids
 
@@ -245,13 +267,34 @@ async def run(files: List[Path], force: bool, dry: bool) -> int:
         print("把试题的 .txt 放进去，再运行一次。")
         return 0
 
-    # 判重
+    # 判重。两层：
+    #   ① 文件名一样 → 已导入过（这是最常见的情况）
+    #   ② **内容 sha1 一样但文件名不同** → 教师改名了。
+    #      这时必须提醒：不然同一道题会在题库里出现两份（用户实测踩过：
+    #      19_xxx.txt 改成 01_xxx.txt，导入后题库变成 4 道题、2 道重复）。
     todo: List[Path] = []
     for p in files:
         got = repo.get_file_imported(p.name)
         if got and not force:
             print(f"· 跳过（已导入过）：{p.name}  → {got[1]} 道题")
             continue
+
+        if not got:
+            try:
+                sha = sha1_of(read_text(p))
+            except OSError:
+                sha = ""
+            same = repo.find_file_by_sha1(sha) if sha else None
+            if same and same["filename"] != p.name and not force:
+                print()
+                print(f"⚠ 注意到「{p.name}」的内容和已导入的"
+                      f"「{same['filename']}」完全一样")
+                print(f"   （只是文件名改了）。如果直接导入，题库里会出现"
+                      f"两份同样的题。")
+                print(f"   想替换掉旧的，就加 --force 重跑：")
+                print(f"       python import_questions.py --force")
+                print()
+                continue
         todo.append(p)
 
     if not todo:
@@ -330,10 +373,28 @@ async def run(files: List[Path], force: bool, dry: bool) -> int:
                 print("    （--dry 模式，不入库）")
                 continue
 
-            # 重导：先清掉这个文件之前拆出的题
+            # 重导：先清掉旧版本。
+            # 两种情况都要清：
+            #   ① 同名 → clear_bank_questions(force=True)，连练习记录一起清
+            #   ② 改名了但内容一样 → 把**旧文件名**那份也清掉，
+            #      否则题库里会留着一份没人要的重复题。
+            #      （save_bank_file 靠 filename 唯一，所以还得删掉旧的
+            #        qbank_files 行，否则下次判重还会撞上它）
             got = repo.get_file_imported(name)
             if got and force:
-                repo.clear_bank_questions(got[0])
+                r = repo.clear_bank_questions(got[0], force=True)
+                if r["deleted"]:
+                    print(f"    · 清掉同名旧版：题目 id {r['deleted']}")
+
+            old_same = repo.find_file_by_sha1(sha1_of(text))
+            if old_same and old_same["filename"] != name:
+                r = repo.clear_bank_questions(old_same["id"], force=True)
+                if r["deleted"] or r["kept"]:
+                    print(f"    · 清掉改名前的旧文件「{old_same['filename']}」："
+                          f"题目 id {r['deleted'] or r['kept']}")
+                conn_del = _drop_bank_file_row(old_same["id"])
+                if conn_del:
+                    print(f"      （同时移除了它的导入记录）")
 
             qids = save_rows(name, text, rows, topic, analysis,
                              pf.has_answer, src, warnings)

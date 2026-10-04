@@ -44,6 +44,18 @@ def _open(app, paper_id: int) -> None:
         app.go_grading()
 
 
+def _score_text(max_score) -> str:
+    """满分文本。题目行被删时显示"—"，不能崩。
+
+    ⚠ 别写 f"{max_score:g}" —— max_score 可能是 None（LEFT JOIN 查不到），
+      `None:g` 直接抛 TypeError，整个历史页都打不开。
+    """
+    try:
+        return f"{float(max_score):g} 分"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _row(app, p: dict) -> ft.Container:
     stem = (p.get("stem") or "").strip().replace("\n", " ")
     if len(stem) > 34:
@@ -74,8 +86,12 @@ def _row(app, p: dict) -> ft.Container:
                     border_radius=6,
                     padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                 ),
-                ft.Text(f"{p.get('max_score', 0):g} 分", size=12, color=theme.MUTED,
-                        width=52),
+                # ⚠ max_score 可能为 NULL：这份存档的题目行被删了
+                #（教师把题库 txt 改名后重导，旧题随之消失）。
+                #   list_papers 用的是 LEFT JOIN，查不到就是 None，
+                #   `None:g` 会直接抛 TypeError 把整个历史页搞崩（实测踩过）。
+                ft.Text(_score_text(p.get("max_score")), size=12,
+                        color=theme.MUTED, width=52),
             ],
             spacing=10,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,

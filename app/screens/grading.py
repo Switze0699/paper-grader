@@ -23,6 +23,28 @@ def _rubric_small(app) -> ft.Container:
     )
 
 
+def _note_small(app) -> ft.Container:
+    """盲评页也显示【评分说明】——你批改时要按同一把尺子。
+
+    教师批改时看不到 AI 的判定，但判分依据（评分细则 + 这条特别规定）
+    必须是双方共用的，否则对比"教师分 vs AI 分"就没有意义了。
+    """
+    q = app.state["question"]
+    if not (q.note or "").strip():
+        return ft.Container()
+    return theme.card(
+        ft.Column(
+            [
+                theme.label("【评分说明】判分时按这条来"),
+                ft.Text(q.note, size=13, color="#3A3A4A"),
+            ],
+            spacing=8,
+        ),
+        bgcolor="#FFF7E0",
+        padding=14,
+    )
+
+
 def _question_small(app) -> ft.Container:
     """盲评页的题面卡。
 
@@ -166,6 +188,7 @@ def render(app) -> None:
             border=ft.Border.all(1, theme.BORDER),
         ),
         _question_small(app),
+        _note_small(app),
         _rubric_small(app),
         _answer_card(app, student),
         theme.card(

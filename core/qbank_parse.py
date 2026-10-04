@@ -87,6 +87,11 @@ class ParsedSub:
         self.stem: str = ""
         self.score: Optional[float] = None
         self.points: List[Dict] = []
+        # 教师自己写的判分注意事项（原文的【评分说明】/【备注】/【说明】）。
+        # ⚠ 这段最容易被忽略，但往往是最关键的：例如"只写前两步、
+        #   漏掉抬升侵蚀的，总分不得超过 4 分"——这是给 AI 阅卷的硬约束，
+        #   丢了它 AI 就会把 6 分的题判成 6 分。
+        self.note: str = ""
 
     @property
     def max_score(self) -> float:
@@ -124,6 +129,7 @@ class ParsedFile:
             "max_score_source": s.score_source(),
             "points": s.points,
             "analysis": self.analysis,
+            "note": s.note,
         } for s in self.subs]
 
 
@@ -177,6 +183,7 @@ _FIELD_NONE = 0
 _FIELD_MATERIAL = 1
 _FIELD_ANALYSIS = 2
 _FIELD_ANSWER = 3
+_FIELD_NOTE = 4
 
 
 def parse_file(text: str) -> ParsedFile:
@@ -204,6 +211,13 @@ def parse_file(text: str) -> ParsedFile:
                     else text_
         elif field == _FIELD_ANSWER and cur_sub is not None:
             cur_sub.points = split_points(text_)
+        elif field == _FIELD_NOTE:
+            # 归属"最近读到的小问"；【评分说明】通常紧跟在【答案】后面，
+            # 这时 cur_sub 就是它，所以两个都兜住。
+            target = cur_sub or last_sub
+            if target is not None and text_:
+                target.note = (target.note + " " + text_) if target.note \
+                    else text_
         buf = []
         field = _FIELD_NONE
 
@@ -232,6 +246,26 @@ def parse_file(text: str) -> ParsedFile:
             end_field()
             field = _FIELD_ANALYSIS
             body = m.group(1).strip()
+            if body:
+                buf = [body]
+            continue
+
+        # 【评分说明】/【评分备注】/【判分说明】/【说明】/【备注】
+        # 教师自己写的判分注意事项，归属最近读到的小问。
+        # ⚠ 必须排在下面"续行"判断之前，否则会被当成陌生标签整段丢掉。
+        #   （实测踩过：用户写了"漏掉抬升侵蚀的总分不得超过4分"，
+        #     解析器不认识这个标签，AI阅卷时看不到这条硬约束。）
+        # 写成循环是为了认这几个近义标签；用独立变量，别借用 m ——
+        # m 后面还要给 RE_SUB / RE_STEM 用，借了会被覆盖。
+        note_hit = None
+        for _alt in ("评分说明", "评分备注", "判分说明", "说明", "备注"):
+            note_hit = _field(_alt).match(s)
+            if note_hit:
+                break
+        if note_hit:
+            end_field()
+            field = _FIELD_NOTE
+            body = note_hit.group(1).strip()
             if body:
                 buf = [body]
             continue

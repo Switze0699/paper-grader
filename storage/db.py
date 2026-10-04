@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS qbank_file_questions (
     qid INTEGER,                -- 存进 questions 表后的 id（真正用于抽题）
     sub_stem TEXT,              -- 这个小问的设问（冗余存一份，方便显示）
     sub_score REAL,             -- 这个小问的满分（冗余）
+    sub_note TEXT,              -- ★ 教师写的【评分说明】（原文的判分硬约束）
     UNIQUE(file_id, sub_no)
 );
 
@@ -152,6 +153,13 @@ NEW_QBANK_FILE_COLUMNS = [
     ("n_subs", "INTEGER DEFAULT 1"),
 ]
 
+# qbank_file_questions 后来加了 sub_note（教师的【评分说明】）。
+# ⚠ 老库（已经导入过题的）不会自动补列，必须在这里 ALTER 补上，
+#    否则查 sub_note 会报 "no such column: sub_note"。
+NEW_QBANK_FILE_QUESTION_COLUMNS = [
+    ("sub_note", "TEXT"),
+]
+
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
     """给已存在的表补上后来新增的列。
@@ -160,7 +168,9 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     所以老存档（这次加耗时字段之前建的）必须在这里补，否则查询会报错。
     """
     for table, cols in (("papers", NEW_PAPER_COLUMNS),
-                        ("qbank_files", NEW_QBANK_FILE_COLUMNS)):
+                        ("qbank_files", NEW_QBANK_FILE_COLUMNS),
+                        ("qbank_file_questions",
+                         NEW_QBANK_FILE_QUESTION_COLUMNS)):
         try:
             have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         except sqlite3.Error:

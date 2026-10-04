@@ -227,6 +227,125 @@ def test_tolerates_shrinking_bank():
     check("题库变小后仍然抽得到题", r.ok, r.reason)
 
 
+def test_scoring_note():
+    print("\n[【评分说明】· 教师写的判分硬约束]")
+    from core.qbank_parse import parse_file
+
+    txt = (
+        "【主题】测试\n"
+        "【材料】某地位于东南丘陵，基岩为花岗岩。\n"
+        "【小问1】\n"
+        "【设问】简述形成过程。\n"
+        "【分值】6\n"
+        "【答案】甲；乙；丙（每点2分，共6分）\n"
+        "【评分说明】只写出前两步的，总分不得超过4分。\n"
+        "【小问2】\n"
+        "【设问】判断依据。\n"
+        "【分值】6\n"
+        "【答案】丁；戊；己\n"
+    )
+    pf = parse_file(txt)
+    check("解析成功", pf.ok, str(pf.warnings))
+    rows = pf.dicts()
+    check("小问1读到了评分说明",
+          "不得超过4分" in rows[0]["note"], repr(rows[0]["note"]))
+    check("小问2没有评分说明（不串味）",
+          rows[1]["note"] == "", repr(rows[1]["note"]))
+
+    # 近义标签也要认（教师可能写成别的名字）
+    for alt in ("评分备注", "判分说明", "备注", "说明"):
+        pf2 = parse_file(
+            "【材料】M\n【小问1】\n【设问】S\n【答案】A；B\n"
+            f"【{alt}】注意判分尺度\n"
+        )
+        check(f"认得【{alt}】",
+              "判分尺度" in pf2.dicts()[0]["note"],
+              repr(pf2.dicts()[0]["note"]))
+
+    # ⚠ 关键：说明要真的发给 AI 阅卷官，且"没有说明时提示词一个字都不多"
+    from core.models import Question, RubricPoint
+    from services.grading_service import _build_prompts
+
+    cfg = {"grading": {"temperature": 0.0}}
+    withnote = Question(
+        subject="地理", topic="测试", max_score=6, stem="简述形成过程。",
+        note="只写出前两步的，总分不得超过4分。",
+        points=[RubricPoint(1, "甲", 2)],
+    )
+    nonote = Question(
+        subject="地理", topic="测试", max_score=6,
+        stem="【材料】某河段位于湿润山区。\n【设问】分析水文特征。（8分）",
+        points=[RubricPoint(1, "降水丰富", 2)],
+    )
+    _, u1 = _build_prompts(cfg, withnote, "答")
+    _, u2 = _build_prompts(cfg, nonote, "答")
+    check("评分说明发给了 AI 阅卷官",
+          "不得超过4分" in u1 and "判分特别规定" in u1)
+    check("没有说明时整块不出现",
+          "判分特别规定" not in u2 and "特别规定" not in u2)
+    check("没有说明时提示词不留多余空行",
+          u2.startswith("【题目】\n【材料】"), repr(u2[:24]))
+    check("老题提示词与从前一致（没有多余行）",
+          u2.count("\n\n【评分细则") == 1, repr(u2[u2.find("【题目】"):][:60]))
+
+
+def test_no_duplicate_on_rename():
+    print("\n[改名后重导不会留下重复题]")
+    from storage import repository as repo
+
+    _fresh_db(2)
+    check("临时库里有 2 道题", repo.bank_questions_count() == 2,
+          str(repo.bank_questions_count()))
+
+    # 模拟：按内容 sha1 能认出"只是改了名"
+    from import_questions import sha1_of
+    raw = "【材料】测试材料：某地位于我国东南丘陵。"
+    sha = sha1_of(raw)
+    conn = __import__("storage.db", fromlist=["get_conn"]).get_conn()
+    conn.execute(
+        "INSERT INTO qbank_files (filename, raw_text, sha1, n_subs)"
+        " VALUES (?,?,?,1)", ("19_旧名.txt", raw, sha))
+    conn.commit()
+    conn.close()
+
+    hit = repo.find_file_by_sha1(sha)
+    check("按内容认出改过名的文件",
+          hit and hit["filename"] == "19_旧名.txt", str(hit))
+    check("sha1 找不到时返回 None", repo.find_file_by_sha1("") is None)
+
+    # clear_bank_questions(force=True) 连练习记录一起清
+    conn = __import__("storage.db", fromlist=["get_conn"]).get_conn()
+    # ⚠ 要取"19_旧名.txt"那一行的 id，不是第一行 ——
+    #   库里已经有 _fresh_db(2) 建的那个文件了
+    fid = conn.execute(
+        "SELECT id FROM qbank_files WHERE filename='19_旧名.txt'"
+    ).fetchone()["id"]
+    # 它自己没有拆出题（上面只插了 qbank_files 行），
+    # 所以给它挂一道题，才能测 clear 的行为
+    cur = conn.execute(
+        "INSERT INTO questions (subject, topic, stem, max_score, created_at)"
+        " VALUES ('地理','测试','旧题',6,'x')")
+    qid_old = cur.lastrowid
+    conn.execute(
+        "INSERT INTO qbank_file_questions (file_id, sub_no, qid, sub_stem,"
+        " sub_score) VALUES (?,1,?,?,6)", (fid, qid_old, "旧题"))
+    conn.execute("INSERT INTO qbank_practice (qid, round_no) VALUES (?,1)",
+                 (qid_old,))
+    conn.commit()
+    conn.close()
+
+    # 不 force：跳过不删（保护练习历史）
+    r1 = repo.clear_bank_questions(fid)
+    check("默认不删有练习记录的题", r1["kept"] == [qid_old] and not r1["deleted"],
+          str(r1))
+    # force：连练习记录一起清
+    r2 = repo.clear_bank_questions(fid, force=True)
+    check("force=True 时连练习记录一起清",
+          r2["deleted"] == [qid_old] and not r2["kept"], str(r2))
+    check("清完这题就不在题库里了",
+          repo.bank_questions_count() == 2, str(repo.bank_questions_count()))
+
+
 def main() -> None:
     print("=" * 46)
     print(" 题库抽题 · 独立自测（用临时库，不碰真实存档）")
@@ -240,6 +359,8 @@ def main() -> None:
         test_link_paper()
         test_reset_all()
         test_tolerates_shrinking_bank()
+        test_scoring_note()
+        test_no_duplicate_on_rename()
     finally:
         # 收尾：删掉临时库，把 DB_PATH 还原成真的那个
         import storage.db as db

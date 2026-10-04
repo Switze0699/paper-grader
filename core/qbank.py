@@ -139,7 +139,12 @@ def _open_round_if_absent(round_no: int) -> bool:
 
 
 def _practiced_count(round_no: int) -> int:
-    """这一轮已经练过几道（只算现在还在题库里的）。"""
+    """这一轮已经练过几道（只算现在还在题库里的）。
+
+    ⚠ 两层 JOIN：既要在 qbank_file_questions 里，也要在 questions 表里。
+       只 JOIN 前者的话，重导后残留的映射会把计数抬高，
+       进度会显示"还剩 1 道"却根本抽不出来（实测踩过）。
+    """
     from storage.db import get_conn
 
     conn = get_conn()
@@ -147,6 +152,7 @@ def _practiced_count(round_no: int) -> int:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM qbank_practice p"
             " JOIN qbank_file_questions fq ON fq.qid = p.qid"
+            " JOIN questions q ON q.id = fq.qid"
             " WHERE p.round_no = ?",
             (int(round_no),),
         ).fetchone()

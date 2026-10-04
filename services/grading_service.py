@@ -27,6 +27,30 @@ def _clean_level(value) -> int:
     return 0 if lv < 0 else (2 if lv > 2 else lv)
 
 
+def _note_block(question: Question) -> str:
+    """把教师写的【评分说明】拼成给阅卷官的一段。
+
+    ⚠ 没有这条就返回空串 —— `fill()` 会把 {note_block} 换成空字符串，
+      所以 AI 随机出题时代的提示词跟从前**一个字都不差**。
+
+    为什么必须发给阅卷官（2026-10-05）：
+      教师的原文里常有这种硬约束——
+      "只写出前两步、漏掉抬升侵蚀的，即使踩点正确，总分也不得超过 4 分"。
+      这是**封顶**规则，不是一条采分点。阅卷官按采分点逐点判完求和，
+      根本不知道还有这条上限，就会把只写两步的答卷判成满分。
+    """
+    note = (question.note or "").strip()
+    if not note:
+        return ""
+    return (
+        "\n【★ 本题的判分特别规定 · 优先级最高】\n"
+        f"{note}\n"
+        "（这是命题老师额外加的硬性规定，比上面的评分细则更优先。"
+        "请严格遵守；逐点判完之后，如果总分超过这里规定的上限，"
+        "必须按这里的上限给分，并在 comment 里说明依据。）\n"
+    )
+
+
 def _build_prompts(cfg: dict, question: Question, answer: str) -> tuple:
     system = fill(
         load_prompt("grading_system.txt"), subject=question.subject
@@ -39,6 +63,9 @@ def _build_prompts(cfg: dict, question: Question, answer: str) -> tuple:
         #   只发 stem 的话阅卷官看不到材料 → 判分必然出错。
         #   AI 随机出题的老题 material 为空，full_stem() 原样返回 stem，行为不变。
         question=question.full_stem(),
+        # ⚠ 2026-10-05：教师写的【评分说明】。空的时候整块不出现，
+        #   所以 AI 随机出题时代提示词跟从前**一模一样**（不多一行废话）。
+        note_block=_note_block(question),
         max_score=f"{question.max_score:g}",
         rubric=question.rubric_text(),
         answer=answer or "（该生未作答）",

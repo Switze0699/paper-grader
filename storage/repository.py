@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from core.models import AiScore, Question, RubricPoint, Student
 from storage.db import get_conn
+
+log = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -216,8 +219,19 @@ def timing_history(limit: int = 20) -> List[dict]:
         conn.close()
 
 
-def _load_question(conn, qid: int) -> Question:
+def _load_question(conn, qid: int) -> Optional[Question]:
+    """读一道题。**题目行被删了就返回 None**（不是崩溃）。
+
+    ⚠ 2026-10-05 实测踩过：教师把题库 txt 改名后重导，旧的两道题行被删，
+       但引用它们的 papers 存档还在。教师点开那份历史记录时，
+       `row["stem"]` 就是 TypeError → 整个应用崩掉。
+       所以这里返回 None，由调用方决定怎么提示。
+    """
     row = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
+    if not row:
+        log.warning("存档引用的题目 id=%s 已不存在（题库重导后旧题被清掉了）",
+                    qid)
+        return None
     points = [
         RubricPoint(seq=int(p["seq"]), text=p["text"], score=float(p["score"]))
         for p in conn.execute(
@@ -227,14 +241,17 @@ def _load_question(conn, qid: int) -> Question:
     # 题库来的题，材料存在 qbank_files 里（一份材料可能被多个小问共用），
     # 这里顺带取出来。AI 随机出题的老题没有这行记录，取到空串。
     material = ""
+    # 同理，【评分说明】是教师自己写的判分硬约束，也要跟着题目取出来。
+    note = ""
     try:
         m = conn.execute(
-            "SELECT f.raw_text FROM qbank_file_questions fq "
+            "SELECT f.raw_text, fq.sub_note FROM qbank_file_questions fq "
             "JOIN qbank_files f ON f.id = fq.file_id WHERE fq.qid=?",
             (qid,),
         ).fetchone()
         if m:
             material = _material_from_raw(m["raw_text"] or "")
+            note = m["sub_note"] or ""
     except sqlite3.Error:
         pass
     return Question(
@@ -245,6 +262,7 @@ def _load_question(conn, qid: int) -> Question:
         max_score=float(row["max_score"]),
         points=points,
         material=material,
+        note=note,
     )
 
 
@@ -300,6 +318,18 @@ def load_paper(paper_id: int) -> Optional[dict]:
         if not p:
             return None
         question = _load_question(conn, int(p["question_id"]))
+        if question is None:
+            # 题目行被删了（题库重导），但这份存档和学生的答卷还在。
+            # 不返回 None —— 那样教师连自己批过的卷子都看不到了。
+            # 造一个占位题：界面能显示，学生答卷和 AI 判定照常看得到。
+            log.warning("第 %s 份存档的题目已不存在，用占位题打开", paper_id)
+            question = Question(
+                subject="地理", topic="（题目已被删除）",
+                stem="这份存档引用的题目已不存在"
+                     "（多半是你把题库里的 txt 改名后重新导入，旧题被清理掉了）。"
+                     "下面的学生答卷和AI 判定仍然完整。",
+                max_score=0, points=[],
+            )
         students = [
             Student(
                 id=int(s["id"]),
@@ -390,17 +420,24 @@ def save_bank_file(filename: str, raw_text: str, sha1: str,
 
 
 def link_bank_question(file_id: int, sub_no: int, qid: int,
-                       sub_stem: str = "", sub_score: float = 0.0) -> None:
-    """把"第 sub_no 小问"和"questions 表里的 qid"关联起来。"""
+                       sub_stem: str = "", sub_score: float = 0.0,
+                       sub_note: str = "") -> None:
+    """把"第 sub_no 小问"和"questions 表里的 qid"关联起来。
+
+    sub_note = 教师写的【评分说明】（2026-10-05）。
+    它必须存在映射表里而不是 questions 表，因为一份材料下每个小问
+    的说明是不同的。
+    """
     conn = get_conn()
     try:
         conn.execute(
             "INSERT INTO qbank_file_questions (file_id, sub_no, qid, sub_stem,"
-            " sub_score) VALUES (?,?,?,?,?)"
+            " sub_score, sub_note) VALUES (?,?,?,?,?,?)"
             " ON CONFLICT(file_id, sub_no) DO UPDATE SET"
             "   qid=excluded.qid, sub_stem=excluded.sub_stem,"
-            "   sub_score=excluded.sub_score",
-            (file_id, int(sub_no), int(qid), sub_stem, float(sub_score)),
+            "   sub_score=excluded.sub_score, sub_note=excluded.sub_note",
+            (file_id, int(sub_no), int(qid), sub_stem, float(sub_score),
+             sub_note or ""),
         )
         conn.commit()
     finally:
@@ -421,13 +458,46 @@ def get_file_imported(filename: str):
         conn.close()
 
 
-def clear_bank_questions(file_id: int) -> None:
+def find_file_by_sha1(sha1: str) -> Optional[dict]:
+    """按内容指纹找已导入的文件（文件名可以不同）。
+
+    用途（2026-10-05）：教师把 19_xxx.txt 改名成 01_xxx.txt，
+    文件名判重抓不到，会导入出两份一样的题。用内容 sha1 就能认出来。
+    """
+    if not sha1:
+        return None
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, filename, n_subs FROM qbank_files WHERE sha1=?",
+            (sha1,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"id": int(row["id"]), "filename": row["filename"],
+                "n_subs": int(row["n_subs"] or 1)}
+    finally:
+        conn.close()
+
+
+def clear_bank_questions(file_id: int, force: bool = False) -> dict:
     """重导之前先清掉这个文件之前拆出来的题目（连同 questions / rubric_points）。
 
     ⚠ 会真的删 questions / rubric_points 里的行 —— 这些行是这个 txt 专属的
     （AI 随机出题时代没有它们），所以删除安全。但先删映射表，
     免得留下指向已删题目的悬空记录。
+
+    force=False（默认）：有练习记录的题**跳过不删** —— 那是用户的练习历史。
+    force=True：连练习记录一起清掉。
+        ⚠ 只在"教师把 txt 改了名/改了内容，明确要重来"时用。
+          副作用：那几道题的练习计数归零；若有存档引用这些 qid，
+          存档还在（papers 行不动），但从历史记录点开时题面会显示不出来。
+          **调用前务必先备份 data/grader.db。**
+
+    返回 {"deleted": [...], "kept": [...]}，让调用方能告诉用户发生了什么。
     """
+    deleted: List[int] = []
+    kept: List[int] = []
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -435,18 +505,37 @@ def clear_bank_questions(file_id: int) -> None:
         ).fetchall()
         qids = [int(r["qid"]) for r in rows if r["qid"]]
         for qid in qids:
-            # 有没有练习记录？有就不能删（那是用户的练习历史）
             used = conn.execute(
                 "SELECT COUNT(*) FROM qbank_practice WHERE qid=?", (qid,)
             ).fetchone()[0]
-            if used:
+            if used and not force:
+                kept.append(qid)
                 continue
             conn.execute("DELETE FROM rubric_points WHERE question_id=?", (qid,))
             conn.execute("DELETE FROM qbank_practice WHERE qid=?", (qid,))
             conn.execute("DELETE FROM questions WHERE id=?", (qid,))
-        conn.execute("DELETE FROM qbank_file_questions WHERE file_id=?",
-                     (file_id,))
+            deleted.append(qid)
+        # ⚠ 只有"确实删了题目"才清映射。
+        #   全被跳过的时侯（kept 装满了）必须把映射留着 ——
+        #   否则题目还在 questions 表里、却再也没人认领它，
+        #   变成抽不到的孤儿（实测踩过：重跑一次 clear 就全找不到了）。
+        if deleted or not kept:
+            conn.execute("DELETE FROM qbank_file_questions WHERE file_id=?",
+                         (file_id,))
         conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": deleted, "kept": kept}
+
+
+def find_bank_file_by_qid(qid: int) -> Optional[int]:
+    """这个 qid 属于题库里的哪个文件（不是题库题就返回 None）。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT file_id FROM qbank_file_questions WHERE qid=?", (qid,)
+        ).fetchone()
+        return int(row["file_id"]) if row else None
     finally:
         conn.close()
 
@@ -466,11 +555,17 @@ def list_bank_files() -> List[dict]:
 
 
 def bank_questions_count() -> int:
-    """题库里一共有多少道可抽的题（= 各文件拆出的小问总数）。"""
+    """题库里一共有多少道可抽的题（= 各文件拆出的小问总数）。
+
+    ⚠ 只算**题目行还在**的那些：重导后可能留下指向已删题目的残留映射，
+      那些算进去会让进度永远算不对（显示"还剩1 道"却抽不出来）。
+    """
     conn = get_conn()
     try:
         return int(conn.execute(
-            "SELECT COUNT(*) FROM qbank_file_questions WHERE qid IS NOT NULL"
+            "SELECT COUNT(*) FROM qbank_file_questions fq "
+            "JOIN questions q ON q.id = fq.qid "
+            "WHERE fq.qid IS NOT NULL"
         ).fetchone()[0])
     finally:
         conn.close()
@@ -489,7 +584,13 @@ def load_bank_questions() -> List[Question]:
             "SELECT qid FROM qbank_file_questions WHERE qid IS NOT NULL "
             "ORDER BY qid"
         ).fetchall()]
-        return [_load_question(conn, q) for q in qids]
+        out: List[Question] = []
+        for q in qids:
+            # 题目行可能已被清掉（重导后的残留映射），跳过而不是崩
+            item = _load_question(conn, q)
+            if item is not None:
+                out.append(item)
+        return out
     finally:
         conn.close()
 

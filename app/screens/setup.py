@@ -205,6 +205,39 @@ def _idle_card(app) -> ft.Container:
     )
 
 
+def _note_card(app) -> ft.Container:
+    """教师自己写的【评分说明】——显示出来，并确认它会发给 AI 阅卷。
+
+    ⚠ 2026-10-05 新增。以前这条只在 txt 里，解析时被当成陌生标签丢掉，
+       教师在界面上完全看不到自己写了什么、也不知道 AI 有没有收到。
+    """
+    q = app.state.get("question")
+    if q is None or not (q.note or "").strip():
+        return ft.Container()          # 空容器 = 不占位置、不显示
+    return theme.card(
+        ft.Column(
+            [
+                theme.label("【评分说明】你写的判分规定，AI 阅卷时会收到并遵守"),
+                ft.Container(
+                    content=ft.Text(q.note, size=14, color=theme.TEXT,
+                                    selectable=True),
+                    bgcolor=theme.CARD2,
+                    border=ft.Border.all(1, theme.BLUE),
+                    border_radius=6,
+                    padding=12,
+                    width=999999,
+                ),
+                ft.Text(
+                    "例如「总分不得超过 4 分」这类封顶规定，AI 会按它执行。",
+                    size=12, color=theme.MUTED,
+                ),
+            ],
+            spacing=8,
+        ),
+        padding=14,
+    )
+
+
 def _material_card(app) -> ft.Container:
     """题库来的题，材料单独显示成一张只读卡片。
 
@@ -584,6 +617,7 @@ def render(app) -> None:
     controls = [
         _header(app),
         _material_card(app),
+        _note_card(app),
         _question_card(app, st["_stem_field"]),
         _rubric_card(app, st["_point_fields"]),
         _repeat_card(app),
