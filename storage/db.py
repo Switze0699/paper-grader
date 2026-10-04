@@ -97,18 +97,34 @@ CREATE TABLE IF NOT EXISTS teacher_grades (
 -- ===========================================================================
 
 -- ① 导入过的 txt 原始文件。filename 唯一 → 靠它判重、跳过重复导入
+--    ⚠ 这里**不存 qid** 了：一个 txt 可能拆成多个小问 → 多道题 → 多个 qid，
+--    关系放在 qbank_file_questions 里（一对多）。存单个 qid 表达不了。
 CREATE TABLE IF NOT EXISTS qbank_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT UNIQUE NOT NULL,
     raw_text TEXT,
     sha1 TEXT,
     imported_at TEXT,
-    parse_status TEXT,          -- ok / need_review
-    qid INTEGER,                -- 存进 questions 后的 id
-    analysis TEXT,              -- 自动生成的题目解析
+    parse_status TEXT,          -- ok / need_review / failed
+    n_subs INTEGER DEFAULT 1,   -- 这个文件拆出几道题
+    analysis TEXT,              -- 题目解析（原文带的）
     has_answer INTEGER,         -- 原文里有没有答案
-    max_score_source TEXT,      -- written（原文写了）/ inferred（点数×2推断）/ fallback
+    max_score_source TEXT,      -- written（原文写了）/ inferred（点数×2推断）
     warnings TEXT
+);
+
+-- ①-b 一个 txt 拆出来的每一道题。★ 多小问支持的关键
+--    例：19_盐风化.txt 里有【小问1】【小问2】→ 拆成 2 行，qid 各不相同，
+--    但 material_id 指向同一个材料（这里用 qbank_files.id 表示）。
+--    抽题时按 qid 抽，两道题都能被抽到、各自独立走完整流程。
+CREATE TABLE IF NOT EXISTS qbank_file_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL,   -- 指向 qbank_files.id（= 哪一份材料）
+    sub_no INTEGER NOT NULL,    -- 原文件里的小问号（1、2…）
+    qid INTEGER,                -- 存进 questions 表后的 id（真正用于抽题）
+    sub_stem TEXT,              -- 这个小问的设问（冗余存一份，方便显示）
+    sub_score REAL,             -- 这个小问的满分（冗余）
+    UNIQUE(file_id, sub_no)
 );
 
 -- ② 练习轮次：保证每道题都抽到一次，才允许重开下一轮
@@ -130,6 +146,12 @@ CREATE TABLE IF NOT EXISTS qbank_practice (
 );
 """
 
+# qbank_files 后来不再用 qid 列（改成一对多的 qbank_file_questions），
+# 但老库里可能已经有这列，留着无害。
+NEW_QBANK_FILE_COLUMNS = [
+    ("n_subs", "INTEGER DEFAULT 1"),
+]
+
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
     """给已存在的表补上后来新增的列。
@@ -137,17 +159,21 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     `CREATE TABLE IF NOT EXISTS` 遇到同名表就跳过，不会补列；
     所以老存档（这次加耗时字段之前建的）必须在这里补，否则查询会报错。
     """
-    try:
-        have = {r[1] for r in conn.execute("PRAGMA table_info(papers)")}
-    except sqlite3.Error:
-        return
-    for name, decl in NEW_PAPER_COLUMNS:
-        if name in have:
-            continue
+    for table, cols in (("papers", NEW_PAPER_COLUMNS),
+                        ("qbank_files", NEW_QBANK_FILE_COLUMNS)):
         try:
-            conn.execute(f"ALTER TABLE papers ADD COLUMN {name} {decl}")
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         except sqlite3.Error:
-            pass   # 多个进程同时补列时可能撞车，忽略即可
+            continue
+        if not have:
+            continue          # 表还没建（正常情况，SCHEMA 会建）
+        for name, decl in cols:
+            if name in have:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+            except sqlite3.Error:
+                pass       # 多进程同时补列可能撞车，忽略即可
     try:
         conn.commit()
     except sqlite3.Error:

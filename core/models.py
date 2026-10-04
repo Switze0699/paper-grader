@@ -26,12 +26,28 @@ class Question:
     max_score: float
     points: List[RubricPoint]
     id: Optional[int] = None
+    # ⚠ 2026-10-04（题库功能）新增：材料正文。
+    #   AI 随机出题时代，题目自带材料（出题时就在 stem 里）；
+    #   现在题目来自教师的题库 txt，"材料"和"设问"是分开的两段，
+    #   所以要单独带一个字段。**给"设问"补默认值，保证老代码不受影响。**
+    material: str = ""
 
     def rubric_text(self) -> str:
         """渲染成给 AI 看的评分细则文本。"""
         return "\n".join(
             f"{p.seq}. {p.text}（{p.score:g} 分）" for p in self.points
         )
+
+    def full_stem(self) -> str:
+        """完整题面 = 材料 + 设问（界面显示、生成答卷时用这个）。
+
+        ⚠ 不能改 stem 本身 —— 阅卷时 AI 要用 stem 定位"这题在问什么"，
+        塞进一大段材料会干扰判定。所以另给一个方法，按需拼。
+        """
+        if not self.material:
+            return self.stem
+        return f"{self.material}\n\n{self.stem}"
+
 
 
 @dataclass
