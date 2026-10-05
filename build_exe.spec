@@ -63,6 +63,11 @@ hiddenimports = [
     #   core.qbank 本身会被 app/screens/setup.py import，已经自动带上。
     "core.qbank",
     "core.qbank_parse",
+    # ⚠ 2026-10-05：新增 core.qbank_import（首页「刷新题库」按钮用）。
+    #   setup.py 会 import 它，理论上扫得到，但解析入库涉及
+    #   core.qbank_parse / storage.repository / storage.db 一整条链，
+    #   少一个就是点按钮时报 ModuleNotFoundError，所以这里全列上。
+    "core.qbank_import",
 ]
 
 # 把 flet 系列包的数据文件（Flutter 运行时等）全部带上

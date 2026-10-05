@@ -227,6 +227,168 @@ def test_tolerates_shrinking_bank():
     check("题库变小后仍然抽得到题", r.ok, r.reason)
 
 
+def test_refresh_imports_new_txt():
+    """★ 首页「刷新题库」按钮背后的逻辑（2026-10-05 用户实测踩过：
+    往题库文件夹里放了新txt，批改器里却看不到新题）。
+
+    这条守住三件事：
+      ① 放进去的 txt 能被 refresh() 导进数据库
+      ② 材料、采分点、【评分说明】都不丢
+      ③ 已经导过的不会重复导（防重复题）
+    """
+    print("\n[刷新题库 · 把新 txt 导进数据库]")
+    import shutil
+
+    import core.qbank_import as qi
+    import storage.db as db
+    from core.models import Question
+    from storage import repository as repo
+
+    # 造一个干净的临时库 + 临时题库目录
+    if TMP_DB.exists():
+        TMP_DB.unlink()
+    db.DB_PATH = TMP_DB
+
+    tmp_bank = ROOT / "tests" / "_tmp_bank"
+    if tmp_bank.exists():
+        shutil.rmtree(tmp_bank)
+    tmp_bank.mkdir(parents=True)
+
+    old_bank = qi.BANK_DIR
+    qi.BANK_DIR = tmp_bank
+    try:
+        good = tmp_bank / "01_测试题.txt"
+        good.write_text(
+            "【主题】测试主题\n"
+            "【材料】某地位于东南丘陵，基岩为花岗岩，岩石节理发育。\n"
+            "\n"
+            "【小问1】\n"
+            "【设问】简述该地岩石节理发育的成因。\n"
+            "【分值】4\n"
+            "【答案】岩浆侵入冷凝形成节理；地壳抬升；外力侵蚀沿节理切割。\n"
+            "【评分说明】只写前两步的不超过 2 分。\n",
+            encoding="utf-8",
+        )
+
+        # ① 新 txt 能导进去
+        res = qi.refresh()
+        check("新 txt 被导入", len(res.imported) == 1,
+              f"imported={len(res.imported)} failed={len(res.failed)}")
+        check("拆出1 道题", res.added_questions == 1,
+              f"实际 {res.added_questions}")
+
+        # ② 内容和评分说明都不丢
+        from core import qbank
+        r = qbank.pick(seed=1)
+        check("抽得到题", r.ok, r.reason)
+        if r.ok:
+            q = r.question
+            check("材料送达（full_stem 里有材料）",
+                  "东南丘陵" in q.full_stem(), q.full_stem()[:40])
+            check("设问是 stem（没被材料污染）",
+                  q.stem.startswith("简述该地"), q.stem[:30])
+            check("采分点 3 个", len(q.points) == 3, str(len(q.points)))
+            check("满分 4 分", abs(q.max_score - 4) < 0.01, str(q.max_score))
+            check("【评分说明】入库了", "不超过 2 分" in (q.note or ""), q.note)
+
+        # ③ 不重复导
+        res2 = qi.refresh()
+        check("已导入的不会被重复导", len(res2.imported) == 0,
+              f"又导了 {len(res2.imported)} 个")
+        check("而是标记为已导入过", len(res2.skipped) == 1,
+              f"skipped={len(res2.skipped)}")
+
+        conn = db.get_conn()
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM qbank_files").fetchone()[0]
+            nq = conn.execute(
+                "SELECT COUNT(*) FROM qbank_file_questions").fetchone()[0]
+        finally:
+            conn.close()
+        check("题库文件表只有1 行", n == 1, str(n))
+        check("题库映射只有 1 行（没出重复题）", nq == 1, str(nq))
+
+        # ④ 坏文件不能把整个刷新搞崩
+        bad = tmp_bank / "02_坏文件.txt"
+        bad.write_text("这��个什么标签都没有，就是一段普通文字。", encoding="utf-8")
+        res3 = qi.refresh()
+        check("坏文件被标记为失败", len(res3.failed) == 1,
+              f"failed={len(res3.failed)}")
+        check("好文件不受影响（没被重复导）",
+              len(res3.imported) == 0, f"imported={len(res3.imported)}")
+        check("坏文件副本留在临时目录（没污染真实题库）",
+              (tmp_bank / "_待确认" / "02_坏文件.txt").exists(),
+              str(sorted(p.name for p in (tmp_bank / "_待确认").glob("*"))
+                  if (tmp_bank / "_待确认").exists() else "无 _待确认"))
+        check("真实题库目录没被写进测试文件",
+              not (old_bank / "_待确认" / "02_坏文件.txt").exists(),
+              "测试污染了真实题库！")
+    finally:
+        qi.BANK_DIR = old_bank
+        shutil.rmtree(tmp_bank, ignore_errors=True)
+        TMP_DB.unlink(missing_ok=True)
+
+
+def test_refresh_detects_rename():
+    """教师把 txt 改了名（内容没变）→ 必须拦住，不能导入出两份一样的题。"""
+    print("\n[刷新题库 · 改名后不产生重复题]")
+    import shutil
+
+    import core.qbank_import as qi
+    import storage.db as db
+
+    if TMP_DB.exists():
+        TMP_DB.unlink()
+    db.DB_PATH = TMP_DB
+
+    tmp_bank = ROOT / "tests" / "_tmp_bank2"
+    if tmp_bank.exists():
+        shutil.rmtree(tmp_bank)
+    tmp_bank.mkdir(parents=True)
+
+    old_bank = qi.BANK_DIR
+    qi.BANK_DIR = tmp_bank
+    try:
+        body = (
+            "【主题】测试\n"
+            "【材料】材料内容。\n"
+            "\n"
+            "【小问1】\n"
+            "【设问】设问内容。\n"
+            "【分值】2\n"
+            "【答案】甲；乙。\n"
+        )
+        (tmp_bank / "19_原名.txt").write_text(body, encoding="utf-8")
+        qi.refresh()
+
+        # 只改文件名，内容一字不动
+        (tmp_bank / "19_原名.txt").unlink()
+        (tmp_bank / "01_新名.txt").write_text(body, encoding="utf-8")
+
+        res = qi.refresh()
+        check("改名后被拦住（不导入）", len(res.imported) == 0,
+              f"imported={len(res.imported)}")
+        check("并提示内容一样", bool(res.failed)
+              and "一样" in (res.failed[0].message if res.failed else ""),
+              res.failed[0].message[:40] if res.failed else "")
+
+        # force=True 时才替换旧的那份
+        res2 = qi.refresh(force=True)
+        check("重新导入全部能替换掉", len(res2.imported) == 1,
+              f"imported={len(res2.imported)}")
+
+        conn = db.get_conn()
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM qbank_files").fetchone()[0]
+        finally:
+            conn.close()
+        check("题库文件表还是 1 行（旧的已清掉）", n == 1, str(n))
+    finally:
+        qi.BANK_DIR = old_bank
+        shutil.rmtree(tmp_bank, ignore_errors=True)
+        TMP_DB.unlink(missing_ok=True)
+
+
 def test_scoring_note():
     print("\n[【评分说明】· 教师写的判分硬约束]")
     from core.qbank_parse import parse_file
@@ -359,6 +521,8 @@ def main() -> None:
         test_link_paper()
         test_reset_all()
         test_tolerates_shrinking_bank()
+        test_refresh_imports_new_txt()
+        test_refresh_detects_rename()
         test_scoring_note()
         test_no_duplicate_on_rename()
     finally:

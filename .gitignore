@@ -135,3 +135,12 @@ prompts_before_qbank/
 app_before_qbank/
 _test_local.py
 回滚题库开发.bat
+
+# ⚠ 题库里的"待核对"副本（2026-10-05）：
+#   refresh() 遇到格式没认全的 txt 会把副本放进 题库/_待确认/，
+#   那是给老师核对用的临时文件，不该进Git。
+#   ⚠ 但 题库/*.txt 本身**要**进Git（那是老师的题，必须备份）。
+题库/_待确认/
+
+# 测试用的临时文件（test_qbank.py 自己会删，加一层兜底）
+tests/_tmp_*

@@ -37,16 +37,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import logging
 import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import paths
 from core.config import get_api_key, load_config, setup_logging
-from core.models import Question, RubricPoint
+from core.qbank_import import (BANK_DIR, DEFAULT_POINT_SCORE, REVIEW_DIR,
+                               list_txt_files, read_text, save_rows, sha1_of)
 from core.qbank_parse import parse_file
 from services.llm import LLMClient
 from services.prompts import load_prompt
@@ -54,47 +53,16 @@ from storage import repository as repo
 
 log = logging.getLogger("import_questions")
 
-BANK_DIR = paths.user_root() / "题库"
-REVIEW_DIR = BANK_DIR / "_待确认"
-
-# txt 的编码候选：老师可能存成 GBK（Windows 默认）
-ENCODINGS = ("utf-8-sig", "utf-8", "gbk", "gb18030", "big5")
-
-# 每点默认分值
-DEFAULT_POINT_SCORE = 2.0
+# ⚠ 2026-10-05：解析/入库/判重都搬到 core/qbank_import.py 了，
+#   因为首页的「刷新题库」按钮要直接调refresh()。
+#   两边共用同一套代码，才不会出现"按钮导入的题和命令行导入的不一样"。
 
 
 # ---------------------------------------------------------------------------
 # 读文件
 # ---------------------------------------------------------------------------
-
-def read_text(path: Path) -> str:
-    raw = path.read_bytes()
-    for enc in ENCODINGS:
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
-
-
-def sha1_of(text: str) -> str:
-    return hashlib.sha1(text.strip().encode("utf-8")).hexdigest()
-
-
-def list_txt_files() -> List[Path]:
-    """列出题库里所有 txt（跳过 _开头的目录，如 _待确认）。"""
-    if not BANK_DIR.exists():
-        return []
-    out: List[Path] = []
-    for p in sorted(BANK_DIR.rglob("*.txt")):
-        rel = p.relative_to(BANK_DIR)
-        if any(part.startswith("_") for part in rel.parts[:-1]):
-            continue
-        if p.name.startswith("~$"):
-            continue          # Office 临时文件
-        out.append(p)
-    return out
+# read_text / sha1_of / list_txt_files 已搬到 core/qbank_import.py，
+# 上面 import 时已带过来，这里不再重复定义。
 
 
 # ---------------------------------------------------------------------------
@@ -201,57 +169,7 @@ def print_check(name: str, pf, rows: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 # 入库
 # ---------------------------------------------------------------------------
-
-def _drop_bank_file_row(file_id: int) -> bool:
-    """删掉 qbank_files 里的一行（文件被改名后重导时用）。
-
-    qbank_files.filename 是 UNIQUE 的：清完题目如果不删这一行，
-    下次再判重还会撞上这个旧文件名。返回是否真的删了。
-    """
-    from storage.db import get_conn
-
-    conn = get_conn()
-    try:
-        cur = conn.execute("DELETE FROM qbank_files WHERE id=?",
-                           (int(file_id),))
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-def save_rows(name: str, raw_text: str, rows: List[Dict[str, Any]],
-              topic: str, analysis: str, has_answer: bool,
-              source: str, warnings: List[str]) -> List[int]:
-    """把 N 道题入库，返回它们的 qid。
-
-    顺序很重要：先 save_bank_file（拿到 file_id），
-    再逐个小问 save_question + link_bank_question。
-    """
-    file_id = repo.save_bank_file(
-        filename=name, raw_text=raw_text, sha1=sha1_of(raw_text),
-        parse_status="need_review" if warnings else "ok",
-        n_subs=len(rows), analysis=analysis, has_answer=has_answer,
-        max_score_source=source, warnings=" | ".join(warnings))
-
-    qids: List[int] = []
-    for r in rows:
-        q = Question(
-            subject="地理",
-            topic=r.get("topic") or topic or "题库导入",
-            stem=r["stem"],
-            max_score=float(r["max_score"]),
-            points=[RubricPoint(seq=p["seq"], text=p["text"],
-                                score=float(p["score"]))
-                    for p in r["points"]],
-        )
-        qid = repo.save_question(q)
-        repo.link_bank_question(file_id, int(r["sub_no"]), qid,
-                                sub_stem=r["stem"],
-                                sub_score=float(r["max_score"]),
-                                sub_note=r.get("note", ""))
-        qids.append(qid)
-    return qids
+# _drop_bank_file_row / save_rows 已搬到 core/qbank_import.py（首页按钮也要用）。
 
 
 # ---------------------------------------------------------------------------

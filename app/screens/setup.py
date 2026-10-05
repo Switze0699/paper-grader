@@ -9,6 +9,7 @@ import flet as ft
 
 from app import theme
 from core import qbank
+from core import qbank_import
 from core.models import RubricPoint
 from core.pipeline import build_class, build_question, persist, run_grading
 from core.timing import (Stopwatch, get_api_calls, reset_api_calls,
@@ -140,6 +141,110 @@ def _start_practice(app) -> None:
     _refresh(app)
 
 
+def _bank_dir_hint() -> ft.Container:
+    """告诉用户东西要放哪儿——他就是不知道这个文件夹在哪。"""
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Text("题库文件夹：", size=12, color=theme.MUTED),
+                ft.Text(str(qbank_import.BANK_DIR), size=12, color=theme.SUB),
+            ],
+            wrap=True,
+            spacing=4,
+        ),
+    )
+
+
+def _do_refresh_bank(app, force: bool = False) -> None:
+    """首页「刷新题库」按钮：把 题库\\ 里新放的 txt 导进数据库。
+
+    ⚠ 2026-10-05 新增。以前新增题目必须找我跑命令行，老师不会用，
+       于是"加了题但批改器里看不到"（用户实测踩过）。
+       纯本地解析，不花 API 额度。
+    """
+    try:
+        res = qbank_import.refresh(force=force)
+    except Exception as e:  # noqa: BLE001
+        log.exception("刷新题库失败")
+        app.show_error(f"刷新题库失败：{e}")
+        return
+
+    app.state["_import_result"] = res
+    _refresh(app)
+
+
+def _import_result_card(app) -> ft.Container:
+    """刷新完的结果：新增了几道题、哪些文件没认出来。"""
+    res = app.state.get("_import_result")
+    if res is None:
+        return ft.Container()
+
+    lines: list[ft.Control] = []
+
+    if res.imported:
+        for f in res.imported:
+            lines.append(
+                ft.Text(f"✓ {f.name}　新增 {len(f.qids)} 道题",
+                        size=14, color=theme.GREEN,
+                        weight=ft.FontWeight.BOLD)
+            )
+            for s in f.subs:
+                src = "" if s.max_score_source == "written" else "（按采分点推断）"
+                lines.append(
+                    ft.Text(f"　　小问{s.sub_no}　{s.max_score:g} 分{src}"
+                            f"　{s.n_points} 个采分点",
+                            size=12, color=theme.SUB)
+                )
+                lines.append(ft.Text(f"　　　{s.stem}", size=12, color=theme.MUTED))
+                if s.note:
+                    lines.append(
+                        ft.Text(f"　　　★ 评分说明已带上：{s.note[:40]}…",
+                                size=12, color=theme.AMBER)
+                    )
+            for w in f.warnings:
+                lines.append(ft.Text(f"　　⚠ {w}", size=12, color=theme.AMBER))
+            lines.append(ft.Container(height=6))
+
+    if res.skipped:
+        for f in res.skipped:
+            lines.append(ft.Text(f"· {f.name}　{f.message}",
+                                size=13, color=theme.MUTED))
+        lines.append(ft.Container(height=6))
+
+    if res.failed:
+        lines.append(ft.Text("下面这些文件没能导入：", size=14,
+                            color=theme.RED, weight=ft.FontWeight.BOLD))
+        for f in res.failed:
+            lines.append(ft.Text(f"✗ {f.name}", size=13, color=theme.RED,
+                                weight=ft.FontWeight.BOLD))
+            for ln in f.message.split("\n"):
+                lines.append(ft.Text(f"　　{ln}", size=12, color=theme.SUB))
+        lines.append(ft.Container(height=6))
+
+    head = ("题库已刷新" if res.imported
+            else ("题库没有新文件" if not res.has_problem else "题库刷新完成"))
+
+    return theme.card(
+        ft.Column(
+            [
+                ft.Text(head, size=17, color=theme.TEXT,
+                        weight=ft.FontWeight.BOLD),
+                *lines,
+                theme.button("知道了", lambda e=None: _close_import_result(app),
+                             bgcolor=theme.SLATE),
+            ],
+            spacing=8,
+        ),
+        bgcolor=theme.CARD2,
+        padding=24,
+    )
+
+
+def _close_import_result(app) -> None:
+    app.state["_import_result"] = None
+    _refresh(app)
+
+
 def _idle_card(app) -> ft.Container:
     """首页主界面。
 
@@ -155,10 +260,18 @@ def _idle_card(app) -> ft.Container:
             ft.Text("题库还是空的", size=17, color=theme.TEXT,
                     weight=ft.FontWeight.BOLD),
             ft.Text(
-                "把试题的 .txt 放进项目里的「题库」文件夹，\n"
-                "然后运行 import_questions.py 导入。\n"
-                "题库里的题会按轮次随机抽给你，一轮练完自动从头再来。",
+                "把试题的 .txt 放进下面的文件夹，然后点「刷新题库」：",
                 size=14, color=theme.SUB,
+            ),
+            _bank_dir_hint(),
+            ft.Container(height=4),
+            ft.Row(
+                [theme.button("刷新题库", lambda e=None: _do_refresh_bank(app))],
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            ft.Text(
+                "题库里的题会按轮次随机抽给你，一轮练完自动从头再来。",
+                size=12, color=theme.MUTED,
             ),
         ]
     else:
@@ -188,6 +301,22 @@ def _idle_card(app) -> ft.Container:
         ft.Column(
             [
                 *body,
+                ft.Divider(height=1, color=theme.BORDER),
+                # 加了新题之后点这里同步（2026-10-05 新增）
+                ft.Row(
+                    [
+                        theme.button("刷新题库（同步新加的题）",
+                                     lambda e=None: _do_refresh_bank(app),
+                                     bgcolor=theme.GREEN),
+                        theme.button("重新导入全部",
+                                     lambda e=None: _do_refresh_bank(app, True),
+                                     bgcolor=theme.SLATE, size=13),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=10,
+                    wrap=True,
+                ),
+                _bank_dir_hint(),
                 ft.Divider(height=1, color=theme.BORDER),
                 # 次要入口：题库跑光了/想练新题时的后路
                 ft.Row(
@@ -601,7 +730,11 @@ def render(app) -> None:
         return
 
     if st["question"] is None:
-        app.render([_header(app), _idle_card(app)])
+        controls = [_header(app), _idle_card(app)]
+        # 刷新完的结果卡片插在最上面（2026-10-05）
+        if st.get("_import_result") is not None:
+            controls.insert(1, _import_result_card(app))
+        app.render(controls)
         return
 
     q = st["question"]
