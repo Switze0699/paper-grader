@@ -878,7 +878,7 @@ def test_config_matches_code():
           bool(cls.get("length_balance", True)))
 
     from core.planner import (
-        ROLE_PROMPTS, WRONG_KINDS, WRONG_QUOTA, WRONG_SAMPLES,
+        ROLE_PROMPTS, WRONG_KINDS, WRONG_QUOTA, WRONG_SAMPLES_BY_FIELD,
         pick_wrong_kinds,
         student_role, wrong_quota,
     )
@@ -959,12 +959,14 @@ def test_config_matches_code():
     check("★错误条数不超过总条数的 1/3（错句不能占满卷面）",
           len(_slots_s) <= max(1, 4 // 3),
           f"4 条里点了 {len(_slots_s)} 条：{_slots_s}")
-    check("★每类错误都带可模仿的改写示例（只给名字 AI 抓不住）",
-          all(s and len(s) > 20 for s in WRONG_SAMPLES.values())
-          and set(WRONG_SAMPLES) == set(WRONG_KINDS),
-          str(sorted(WRONG_SAMPLES)))
+    check("★每类错误在每个领域都带可模仿的改写示例（只给名字 AI 抓不住）",
+          set(WRONG_SAMPLES_BY_FIELD) == {"人文", "自然"}
+          and all(set(v) == set(WRONG_KINDS)
+                  and all(s and len(s) > 20 for s in v.values())
+                  for v in WRONG_SAMPLES_BY_FIELD.values()),
+          str({k: sorted(v) for k, v in WRONG_SAMPLES_BY_FIELD.items()}))
     check("★错误指令强调不许犯低级蠢话",
-          "海拔越高气温越高" in student_role("很差", "", ["答非所问"], 5))
+          "海拔越高" in student_role("很差", "", ["答非所问"], 5))
     check("★优秀档的角色提示词里没有'点名改错'",
           "点名改错" not in student_role("优秀", "扎实型", []))
 
@@ -1380,6 +1382,96 @@ def test_profile_library():
               pm.load_profiles(Path(td)) == [])
 
 
+def test_field_lock():
+    """★ 学科领域锁定（2026-10-05 第 66 批）——错误不许跨科。
+
+    背景：人文题里冒出了"亚热带季风气候""板块交界处""地形崎岖"，
+    教师一眼看出"这不像差生写的，像根本没看题"。
+    根因是旧的错误示例全是自然地理的，AI 照着套就串了领域。
+    """
+    from core.planner import (
+        WRONG_KINDS, _wrong_instruction, detect_field,
+        student_role,
+    )
+
+    PHY = ("气候", "季风", "地形", "崎岖", "地质", "水文", "植被",
+           "土壤", "板块", "降水", "气温", "风化", "岩石", "岩浆")
+    HUM = ("市场", "政策", "劳动力", "交通", "产业", "人口", "城市",
+           "电商", "区位", "经济", "产业链", "物流")
+
+    human_q = Question(
+        subject="地理", topic="产业区位与区域发展（义乌电商）",
+        stem="说明义乌成为该区域中心城市的主要原因。",
+        material="【材料】义乌本是浙江中部山区的一个小镇，因其小商品批发……",
+        max_score=8.0,
+        points=[RubricPoint(seq=1, text="拥有强大的小商品集散市场", score=2.0)],
+    )
+    phys_q = Question(
+        subject="地理", topic="地表形态的塑造（盐风化与岩石形成）",
+        stem="推测流纹岩的形成过程。",
+        material="【材料】黑坡角岩滩位于广东省东部海岸带，地处莲花山断裂带……",
+        max_score=6.0,
+        points=[RubricPoint(seq=1, text="岩浆沿断裂带喷出地表", score=2.0)],
+    )
+
+    # ---- 1. 领域识别 ----
+    check("人文题被认出来", detect_field(human_q) == "人文",
+          detect_field(human_q))
+    check("自然题被认出来", detect_field(phys_q) == "自然",
+          detect_field(phys_q))
+    blank = Question(subject="地理", topic="", stem="这是什么？",
+                     max_score=6.0, points=[])
+    check("判不出来时返回空（不锁定，宁可宽松不误伤）",
+          detect_field(blank) == "", repr(detect_field(blank)))
+
+    # ---- 2. ★★ 核心断言：人文题的提示词里不许有自然名词 ★★ ----
+    bad = []
+    for kind in WRONG_KINDS:
+        text = _wrong_instruction([kind], 5, "人文", False)
+        hit = [w for w in PHY if w in text]
+        if hit:
+            bad.append((kind, hit))
+    check("★人文题的三种错误指令里零自然地理名词（含否定式列举也要干净）",
+          not bad, str(bad))
+
+    bad2 = []
+    for kind in WRONG_KINDS:
+        text = _wrong_instruction([kind], 5, "自然", False)
+        hit = [w for w in HUM if w in text]
+        if hit:
+            bad2.append((kind, hit))
+    check("★自然题的三种错误指令里零人文地理名词",
+          not bad2, str(bad2))
+
+    # ---- 3. 有人文示例可以照着改（不能只是"禁止"） ----
+    t = _wrong_instruction(["张冠李戴"], 5, "人文", False)
+    check("人文题的张冠李戴给的是人文示例（市场/劳动力一类）",
+          ("市场" in t or "劳动力" in t or "政策" in t))
+
+    # ---- 4. 跨领域只对很差档的一小部分人放行 ----
+    import random as _rnd
+    _rnd.seed(7)
+    mid_cross = sum(
+        1 for _ in range(120)
+        if "唯一的例外" in student_role("中等", "", ["张冠李戴"], 5,
+                                        question=human_q)
+    )
+    check("★中等档【从不】放行跨领域（它不该串科）", mid_cross == 0,
+          f"{mid_cross}/120")
+    low_cross = sum(
+        1 for _ in range(300)
+        if "唯一的例外" in student_role("很差", "", ["张冠李戴"], 5,
+                                        question=human_q)
+    )
+    check("很差档只有一部分人放行跨领域（设计值 30%，实测不超一半）",
+          0 < low_cross < 150, f"{low_cross}/300")
+
+    # ---- 5. 不传 question 时不锁定（老行为，测试与旧调用零影响） ----
+    old = student_role("中等", "浮于表面型", ["张冠李戴"], 5)
+    check("不传 question 时不做领域锁定（老流程不变）",
+          "本题是【" not in old and "点名改错" in old)
+
+
 def _fake_question():
     """造一道 3 个采分点的假题（不联网、不读库）。"""
     return Question(
@@ -1416,6 +1508,7 @@ def main() -> None:
     test_material_leak_guard()
     test_material_reaches_everyone()
     test_profile_library()
+    test_field_lock()
     print("\n" + "=" * 46)
     if FAILED:
         print(f" 有 {len(FAILED)} 项未通过：")

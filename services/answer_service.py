@@ -63,7 +63,8 @@ def build_student_block(question: Question, plan: StudentPlan) -> str:
     #   错误指令仍由 planner 点名条号生成——两者【叠加】，谁也不替谁。
     #   实测只喂 role_hint 时 AI 五条全写对，一条错误都注入不进去。
     role = student_role(plan.ability, plan.style, plan.wrong_kinds,
-                        (lo_l + hi_l) // 2, role_hint=plan.role_hint)
+                        (lo_l + hi_l) // 2, role_hint=plan.role_hint,
+                        question=question)
     return (
         f"学生编号：{plan.seq}\n"
         f"水平：{plan.ability}\n"
@@ -158,7 +159,8 @@ async def _fix_answer(
         load_prompt("answer_fix.txt"),
         question=question.full_stem(),   # ⚠ 同上：必须带材料
         answer=answer,
-        role=student_role(plan.ability, plan.style),
+        role=student_role(plan.ability, plan.style, role_hint=plan.role_hint,
+                          question=question),
         ability=plan.ability,
         problems="；".join(problems),
         length=_length_for(question, plan),
