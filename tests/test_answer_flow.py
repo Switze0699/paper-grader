@@ -180,7 +180,20 @@ def test_no_rubric_leak():
     check("没有出现「采分点」字样", "采分点" not in whole)
     check("没有出现「完整命中／部分命中」这类内部档位词", "命中" not in whole)
     check("没有出现「要漏掉哪段因果」这类逐点指令",
-          "漏掉" not in whole and "因果链" not in whole)
+          "漏掉哪段" not in whole and "因果链" not in whole)
+    # ★2026-10-05：差生书面语铁律（用户实测第52 份里"大家喜欢""买买东西"）
+    check("生成端写明'差生不等于没上过高中'",
+          "差生不等于没上过高中" in whole)
+    check("生成端把书面语列为硬红线且五档都适用",
+          "书面语是硬红线" in whole and "五档全部适用" in whole)
+    check("生成端明确禁掉日常口语例子",
+          "大家喜欢" in whole and "买买东西" in whole)
+    check("生成端写明'水平差不体现在说话像不像学生'",
+          "不体现在说话像不像学生" in whole)
+    check("生成端写明'写得少≠ 说大白话'",
+          "写得少 ≠ 说大白话" in whole)
+    check("生成端把口语列入'不允许的错误'",
+          "不允许的错误" in whole and "说大白话" in whole)
     check("明确告诉 AI 它看不到标准答案",
           "没有标准答案" in whole or "没有人会把评分细则给你" in whole)
 

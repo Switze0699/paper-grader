@@ -678,11 +678,18 @@ def test_prompts():
           all(k in sys_prompt for k in ("优秀", "良好", "中等", "薄弱", "很差")))
     check("答卷提示词要求各档写得明显不同",
           "必须能看出明显的水平差" in sys_prompt)
-    check("答卷提示词允许的两类错误（不完整／记混了）写清了",
-          "不完整" in sys_prompt and "记混了" in sys_prompt
-          and "像模像样" in sys_prompt)
-    check("仍禁止编造低级错误（海拔越高气温越高）",
-          "海拔越高气温越高" in sys_prompt)
+    check("答卷提示词允许的三类错误（答非所问／因果颠倒／张冠李戴）写清了",
+          all(k in sys_prompt for k in ("答非所问", "因果颠倒", "张冠李戴")),
+          "缺：" + "、".join(k for k in ("答非所问", "因果颠倒", "张冠李戴")
+                           if k not in sys_prompt))
+    check("答卷提示词要求错误'听着有道理'、不许写低级蠢话",
+          "海拔越高气温越高" in sys_prompt and "听着有道理" in sys_prompt)
+    # ★ 2026-10-05 用户新设计：所有档位都写满，差生也不例外。
+    check("答卷提示词明令五档都要写满（不许少写几条）",
+          "五档都必须写满" in sys_prompt or "一律按系统给的条数写满" in sys_prompt)
+    check("答卷提示词把'卷面比优等生短'列为写砸方式",
+          "卷面明显比优等生短" in sys_prompt
+          or "明显比别人短" in sys_prompt)
 
     # 答题规范
     check("答卷提示词要求分点编号 + 完整句子（防残句）",
@@ -717,26 +724,53 @@ def test_prompts():
           "不要写成所有采分点分值之和" in q_prompt)
 
     grad = load_prompt("grading_system.txt")
-    # 【2026-10-02 用户改判定标准】从"三环齐全"改成
-    # "核心采分点 × 是否与设问连接"，底线是严禁拿无关名词凑分。
+    # 【2026-10-05 用户改判定标准】据第52 份批改记录实测出的三个 bug：
+    #   ① 一句话重复踩两个采分点被重复给分（8 份里6 份中招）
+    #   ② 缺因果连接词就只给一半分 → 制造虚假的"半吊子"
+    #   ③ 差生说大白话（生成端，另在 test_answer_flow 守）
+    # 三档（满分/一半/零分）已废除，收敛为"满分/零分"两档。
     check("阅卷提示词把「看到核心词就给分」列为头号禁令",
-          "看到无关名词就给分" in grad and "绝对底线" in grad)
-    check("阅卷提示词要求先拆成'三环'再判",
-          "三环" in grad and "因果机制" in grad)
-    check("阅卷提示词写明'条件点出来了 = 1 分'（与 planner 的部分命中对齐）",
-          "部分命中" in grad and "条件／现象" in grad)
-    check("阅卷提示词写明'核心采分点必须严格对照本条的评分细则'",
-          "核心采分点" in grad and "必须严格对照本条评分细则" in grad)
-    check("阅卷提示词写明'1 分 = 有核心采分点但没跟设问挂钩'",
-          "完全没和设问挂钩" in grad)
-    check("阅卷提示词写明'0 分 = 连核心采分点都没写出来'",
-          "没写出【核心采分点】" in grad)
-    check("阅卷提示词写明'连接不成立 ≠ 建立了连接'（似是而非只给 1 分）",
-          "似是而非" in grad and "不成立" in grad)
-    check("阅卷提示词要求判 2 分时引用'体现连接的原话'",
-          "体现那个连接的原话" in grad)
-    check("阅卷提示词写明'答非所问一律 0 分'",
-          "答非所问一律 0 分" in grad)
+          "看到无关名词就给分" in grad and "严禁" in grad)
+    check("阅卷提示词写明'核心采分点要对照本条的评分细则'",
+          "核心采分点" in grad and "对照本条评分细则" in grad)
+
+    # ★ 修复①：严禁一句话重复踩两个点（死命令）
+    check("阅卷提示词有'严禁一句话重复踩两个点'的死命令",
+          "严禁" in grad and "一句话重复踩两个点" in grad)
+    check("阅卷提示词写明同一句话只能判给一个采分点",
+          "同一句话只能判给一个采分点" in grad)
+    check("阅卷提示词禁止两条采分点用同一句evidence",
+          "同一个 evidence 字符串绝对不许出现在两条" in grad)
+    check("阅卷提示词举了实测的重复给分错例（地理位置+交通便利）",
+          "重复给分" in grad and ("物流运输" in grad or "交通便利" in grad))
+    check("阅卷提示词保留了'一句话确实讲两件事才能拆开'的例外",
+          "两件事写在一句里" in grad or "这是**两件事**" in grad)
+
+    # ★★ 2026-10-05 用户新设计：三档恢复，但 1 分只对应"该分析而没写"
+    check("阅卷提示词恢复三档（满分/一半/零分）",
+          "三档" in grad and "满分" in grad and "一半" in grad)
+    check("阅卷提示词写清 1 分只用于'本条要分析却只写了现象'",
+          "只写了现象" in grad and "一半分" in grad and "1 分" in grad,
+          "缺：" + "、".join(k for k in ("只写了现象", "一半分", "1 分")
+                          if k not in grad))
+    check("阅卷提示词要求判1 分前先看清细则有没有冒号",
+          "冒号" in grad and ("没有冒号" in grad or "本身就没有冒号" in grad))
+    check("阅卷提示词明令'连接词本身不扣分'（与'分析没写'分开）",
+          "连接词" in grad and ("不作为扣分" in grad or "不是得分点" in grad))
+    check("阅卷提示词禁止拿 level=1 惩罚'句子简短/没连接词'",
+          "缺连接词" in grad and ("满分" in grad))
+    check("阅卷提示词写明答非所问判0 分（不是 1 分）",
+          "答非所问" in grad and "0 分" in grad)
+    check("阅卷提示词要求判 1 分时写明漏掉了哪一层分析",
+          "漏掉" in grad and "分析" in grad)
+    check("阅卷提示词写明'电商企业数量很多'这类无冒号细则应给满分",
+          "电商企业数量很多" in grad and "满分" in grad)
+    check("阅卷提示词明确禁止造出虚假的半吊子分数",
+          "半吊子" in grad)
+    check("阅卷提示词要求同义近义表述一律算命中（不死抠字面）",
+          "同义" in grad and "都算命中" in grad)
+    check("阅卷提示词写明复述材料不扣分",
+          "复述材料**不扣分**" in grad or "复述材料不扣分" in grad)
     check("阅卷提示词要求引用时用「」（JSON 安全）",
           "严禁在内容里使用英文双引号" in grad and "不要输出总分" in grad)
 
@@ -822,39 +856,118 @@ def test_config_matches_code():
 
     check("LENGTH_SPEC 覆盖了全部档位", set(LENGTH_SPEC) == set(TARGET_RATIO))
 
-    # 【2026-09-29 最终版】中上三档写满，薄弱／很差明显写得少。
-    # 实测教训（第 30 号）：把很差的篇幅也拉到 145~205 字之后，
-    # AI 扮演"基础很差的学生"并不会真的变笨，只是把话说得笼统些——
-    # 结果"很差"档写了 194 字、AI 判了 7 分（满分 8），和中等档分不出高下。
-    # 区分度就是靠这段篇幅差撑着的，别再拉平。
+    # ★★ 2026-10-05 用户新设计：**条数一律放开，靠"故意写错"压分**
+    # 旧规则是"下两档明显写得少"（靠篇幅差撑区分度）。
+    # 用户明确要求"所有档位都写满，差生也写 4~5 条，跟优等生一样多"——
+    # 因为砍条数虽然能压分，但差生的卷面一眼就看出比优等生短，
+    # 教师练批改时会先注意到长短而不是内容对错。
+    # 现在靠 planner.WRONG_QUOTA 的错误配额压分（见下面的断言）。
     check("中上三档写满（字数下限 ≥150）",
           all(LENGTH_SPEC[a][2] >= 150 for a in ("优秀", "良好", "中等")),
           str({a: LENGTH_SPEC[a][2] for a in ("优秀", "良好", "中等")}))
-    check("薄弱／很差明显写得少（上限不高于中等档的下限）",
-          max(LENGTH_SPEC["薄弱"][3], LENGTH_SPEC["很差"][3])
-          <= LENGTH_SPEC["中等"][2],
-          f"薄弱上限{LENGTH_SPEC['薄弱'][3]}／很差上限{LENGTH_SPEC['很差'][3]}"
-          f" vs 中等下限{LENGTH_SPEC['中等'][2]}")
-    check("好生与差生的篇幅拉得开（优秀下限 ≥ 很差上限的 1.3 倍）",
-          LENGTH_SPEC["优秀"][2] >= LENGTH_SPEC["很差"][3] * 1.3,
-          f"优秀下限{LENGTH_SPEC['优秀'][2]} vs 很差上限{LENGTH_SPEC['很差'][3]}")
+    check("★下两档也要写满条数（用户要求差生卷面不更短）",
+          LENGTH_SPEC["薄弱"][0] >= 4 and LENGTH_SPEC["很差"][0] >= 4,
+          f"薄弱{LENGTH_SPEC['薄弱'][0]}／很差{LENGTH_SPEC['很差'][0]}")
+    check("★下两档的字数也要跟上（不能一眼看出长短）",
+          LENGTH_SPEC["很差"][2] >= 100 and LENGTH_SPEC["薄弱"][2] >= 100,
+          f"很差下限{LENGTH_SPEC['很差'][2]}／薄弱下限{LENGTH_SPEC['薄弱'][2]}")
     check("最差档也不是交白卷（至少 2 条、60 字）",
           LENGTH_SPEC["很差"][0] >= 2 and LENGTH_SPEC["很差"][2] >= 60,
           str(LENGTH_SPEC["很差"]))
     check("配置里有'篇幅均衡'开关（现在只防极端残卷）",
           bool(cls.get("length_balance", True)))
 
-    from core.planner import ROLE_PROMPTS
+    from core.planner import (
+        ROLE_PROMPTS, WRONG_KINDS, WRONG_QUOTA, WRONG_SAMPLES,
+        pick_wrong_kinds,
+        student_role, wrong_quota,
+    )
     check("薄弱／很差档的角色提示词都强调答题卡不许空着",
           all(("空着" in ROLE_PROMPTS.get(a, "") or "写满" in ROLE_PROMPTS.get(a, ""))
               for a in ("薄弱", "很差")),
           str({a: ROLE_PROMPTS.get(a, "")[:24] for a in ("薄弱", "很差")}))
-    # 【2026-10-02 用户要求压平均分】中等/薄弱档不能"会写又会推因果"——
-    # 实测过：那样它们能把 5 个采分点全覆盖，拿 7~8 分，跟优秀生分不出高下。
-    check("中等／薄弱档要求『只罗列现象、少推因果』（压平均分的关键）",
-          "所以会怎么样" in ROLE_PROMPTS.get("中等", "")
-          and "所以会怎么样" in ROLE_PROMPTS.get("薄弱", ""),
-          str({a: ROLE_PROMPTS.get(a, "")[-30:] for a in ("中等", "薄弱")}))
+    # ★ 2026-10-05：三档的"写得浅"描述不许再说"少写几条"——
+    #   篇幅由 LENGTH_SPEC 管，水平差异靠错误类型与"推不推得深"。
+    check("★五档角色提示词都不许出现'少写/停笔/写不出'这类篇幅指令",
+          not any(kw in ROLE_PROMPTS.get(a, "")
+                  for a in ("优秀", "良好", "中等", "薄弱", "很差")
+                  for kw in ("少写", "停笔", "想不起来了", "几行就停")),
+          str({a: kw for a in ("中等", "薄弱", "很差")
+               for kw in ("少写", "停笔", "想不起来了")
+               if kw in ROLE_PROMPTS.get(a, "")}))
+    check("★中等档要求'不往下推'（阅卷端据此给 1 分档）",
+          ("不擅长" in ROLE_PROMPTS.get("中等", "")
+           or "不往下推" in ROLE_PROMPTS.get("中等", "")),
+          ROLE_PROMPTS.get("中等", "")[-40:])
+
+    # ★★ 错误配额：这是压得分率的主力阀门，必须守住
+    check("WRONG_QUOTA 覆盖了全部档位",
+          set(WRONG_QUOTA) == set(TARGET_RATIO),
+          str(sorted(set(TARGET_RATIO) - set(WRONG_QUOTA))))
+    check("★优秀档一条错都不许有", wrong_quota("优秀") == (0, 0),
+          str(wrong_quota("优秀")))
+    check("★错误配额随水平递减（中等 1~2／薄弱 2~3／很差 2~3）",
+          wrong_quota("中等") == (1, 2)
+          and wrong_quota("薄弱") == (2, 3)
+          and wrong_quota("很差") == (2, 3),
+          str({a: wrong_quota(a) for a in ("中等", "薄弱", "很差")}))
+    check("★优秀/良好档错误配额明显少于下两档（错误是主力阀门）",
+          wrong_quota("优秀")[1] < wrong_quota("中等")[0]
+          and wrong_quota("良好")[1] <= wrong_quota("中等")[0],
+          str({a: wrong_quota(a) for a in ("优秀", "良好", "中等")}))
+    check("★三类错误名称与生成提示词里写的完全一致",
+          all(k in load_prompt("answer_system.txt") for k in WRONG_KINDS),
+          "缺：" + "、".join(k for k in WRONG_KINDS
+                          if k not in load_prompt("answer_system.txt")))
+    # 抽出来的必须是表里有的名字，且条数落在配额区间内
+    import random as _r
+    ok_n, ok_k = True, True
+    for a in WRONG_QUOTA:
+        lo, hi = wrong_quota(a)
+        for _ in range(30):
+            kinds = pick_wrong_kinds(a, _r.Random())
+            if not (lo <= len(kinds) <= hi):
+                ok_n = False
+            if any(k not in WRONG_KINDS for k in kinds):
+                ok_k = False
+    check("★抽出来的错误条数都落在该档配额内", ok_n,
+          f"中等={wrong_quota('中等')} 抽到 {[len(pick_wrong_kinds('中等', _r.Random())) for _ in range(5)]}")
+    check("★抽出来的错误名称都在三类之内", ok_k, str(WRONG_KINDS))
+    # 角色提示词里要真的带上了错误配额，且是**点名条号**的硬指令
+    check("★student_role 会把错误配额写进角色提示词",
+          "点名改错" in student_role("很差", "", ["答非所问", "因果颠倒"], 5),
+          student_role("很差", "", ["答非所问"], 5)[:80])
+    # ★ 实测：抽象的"你会答错"AI 不听，必须点名到第几条
+    import re as _re
+    _slots = [int(x) for x in _re.findall(r"第 (\d+) 条写成",
+                student_role("很差", "", ["因果颠倒", "答非所问"], 9))]
+    check("★错误指令点到了具体条号（实测：抽象指令 AI 会忽略）",
+          len(_slots) == 2 and _slots == sorted(_slots),
+          f"实际点了第 {_slots} 条")
+    # 错误条号不能落在第 1 条（那条写得最像样，写错代价太大），
+    # 也不许全挤在末尾（那样 AI 会只把最后一条写错）
+    _slots3 = [int(x) for x in _re.findall(r"第 (\d+) 条写成",
+                student_role("很差", "", ["答非所问", "因果颠倒", "张冠李戴"], 9))]
+    check("★错误条号从第 2 条起（不占掉最像样的第一条）",
+          bool(_slots3) and 1 not in _slots3, f"实际点了第 {_slots3} 条")
+    check("★错误条号散开铺，不挤在末尾",
+          bool(_slots3) and _slots3[0] <= 5 and _slots3[-1] >= 8,
+          f"9 条的卷子里点了第 {_slots3} 条")
+    # ★ 错误条数不能占满：至少一半条目是对的，否则不像真实考生
+    _slots_s = [int(x) for x in _re.findall(r"第 (\d+) 条写成",
+                 student_role("很差", "", ["答非所问", "因果颠倒", "张冠李戴"], 4))]
+    check("★错误条数不超过总条数的 1/3（错句不能占满卷面）",
+          len(_slots_s) <= max(1, 4 // 3),
+          f"4 条里点了 {len(_slots_s)} 条：{_slots_s}")
+    check("★每类错误都带可模仿的改写示例（只给名字 AI 抓不住）",
+          all(s and len(s) > 20 for s in WRONG_SAMPLES.values())
+          and set(WRONG_SAMPLES) == set(WRONG_KINDS),
+          str(sorted(WRONG_SAMPLES)))
+    check("★错误指令强调不许犯低级蠢话",
+          "海拔越高气温越高" in student_role("很差", "", ["答非所问"], 5))
+    check("★优秀档的角色提示词里没有'点名改错'",
+          "点名改错" not in student_role("优秀", "扎实型", []))
+
     check("默认画像比例也是五类齐全",
           set(DEFAULT_STYLE_WEIGHTS) == set(HALF_STYLES))
 

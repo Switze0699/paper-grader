@@ -83,6 +83,14 @@ class StudentPlan:
     # 逐点缺陷要求：{采分点序号: 具体做法}，生成答案时逐点下发给 AI。
     # 例如 {2: "答非所问：问自然原因，写成人文因素"}，防止它偷偷写满
     defects: Dict[int, str] = field(default_factory=dict)
+    # ⚠ 2026-10-05 新增：这一份【故意要犯哪几类错】（见 planner.WRONG_QUOTA）。
+    #   取值范围 = planner.WRONG_KINDS（答非所问 / 因果颠倒 / 张冠李戴）。
+    #   只对生成端生效，判分端完全不知道它存在——AI 阅卷官看到的就是
+    #   一份"有错但看不出错在哪"的卷子，那才是真实的批改训练场景。
+    #   ⚠ 这份名单同时被质量闸门用来放行"故意的答非所问"：
+    #     core/quality.py 的方向红线原本见到违禁词就打回重写，
+    #     会把故意写的错误"修"掉，白烧额度还压不下得分率。
+    wrong_kinds: List[str] = field(default_factory=list)
 
 
 @dataclass

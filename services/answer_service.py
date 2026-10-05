@@ -31,7 +31,7 @@ import logging
 from typing import Callable, List, Optional
 
 from core.models import Question, Student, StudentPlan
-from core.planner import expected_points, length_hint, student_role
+from core.planner import expected_points, length_bounds, length_hint, student_role
 from core.quality import (
     answer_length_problem,
     class_length_problem,
@@ -52,7 +52,15 @@ def _length_for(question: Question, plan: StudentPlan) -> str:
 
 def build_student_block(question: Question, plan: StudentPlan) -> str:
     """把"这位学生是谁"翻译成提示词块（不含任何评分细则的内容）。"""
-    role = student_role(plan.ability, plan.style)
+    point_score = question.points[0].score if question.points else 2.0
+    n_expect = expected_points(question.max_score, point_score)
+    lo_l, hi_l, _lo_c, _hi_c = length_bounds(plan.ability, n_expect)
+    # ⚠ wrong_kinds 必须传 plan 里那一份，不能让 student_role 现抽——
+    #   现抽的话，生成用的和下面质量闸门用的会是两个不同名单。
+    # n_lines 传"预计写几条"，用来给错误分配具体条号（从第 2 条起铺开）——
+    #   实测：只说"有一处会答错"AI 不听，必须点名"第3 条写成张冠李戴"。
+    role = student_role(plan.ability, plan.style, plan.wrong_kinds,
+                        (lo_l + hi_l) // 2)
     return (
         f"学生编号：{plan.seq}\n"
         f"水平：{plan.ability}\n"
@@ -195,7 +203,12 @@ async def quality_gate(
     plan_by_seq = {p.seq: p for p in plans}
 
     def check(answer: str, plan: StudentPlan) -> List[str]:
-        problems = direction_violations(question, answer, forbidden)
+        # ⚠ allowed = 这一份【故意】要犯的方向错误条数（2026-10-05）。
+        #   生成端现在按planner.WRONG_QUOTA 注入「答非所问」类错误来压得分率，
+        #   闸门要放行这些错误——否则会把它们"修"掉，白烧额度还压不下分。
+        #   超出配额才算真跑方向，那才是要拦的硬伤。
+        allowed = len(plan.wrong_kinds or [])
+        problems = direction_violations(question, answer, forbidden, allowed)
         short = answer_length_problem(question, plan, answer)
         if short:
             problems.append(short)

@@ -288,11 +288,21 @@ def direction_violations(
     question: Question,
     answer: str,
     forbidden: Optional[Dict[str, Iterable[str]]] = None,
+    allowed: int = 0,
 ) -> List[str]:
     """检查答案里有没有"跟题目方向不符"的违禁词。
 
     forbidden 形如 {"natural": [...], "favorable": [...]}（来自 config.yaml）。
     返回人类可读的问题列表；空列表表示没有跑方向。
+
+    ⚠ 2026-10-05 新增参数 allowed：**允许有几处故意的方向错误**。
+      为什么需要它：现在生成端会按planner.WRONG_QUOTA 故意注入
+      「答非所问」类的错误（中等 1 条、薄弱 2 条、很差 2~3 条）来压得分率。
+      这道闸门原本见到违禁词就整份打回重写，会把**故意写的错误"修"掉**——
+      白烧额度，而且闸门反复打回会让 AI 越改越少写，得分率反而压不下来。
+      所以这里按分句计数：违禁词出现次数没超过 allowed 就放过。
+      超出配额才算真跑方向，那才是要拦的硬伤。
+      allowed 一般传 len(plan.wrong_kinds)，由调用方给。
     """
     if not answer.strip():
         return []
@@ -306,21 +316,33 @@ def direction_violations(
         "natural": "题目问的是自然条件／自然原因",
         "favorable": "题目问的是有利条件／优势",
     }
+    # 按分句切开数——统计"有几处写了不该有的东西"，
+    # 而不是"有几个违禁词"（一处可能顺口带过好几个词）。
+    segs = [s for s in re.split(r"[\n；;。]", answer or "") if s.strip()]
     problems: List[str] = []
     for key in dirs:
         words = [str(w).strip() for w in (forbidden.get(key) or []) if str(w).strip()]
-        hits: List[str] = []
-        for w in words:
-            # 细则自己用过的词放行（细则里的词是教师认可的，不算跑题）
-            if w in rubric or w in hits:
+        hit_segs: List[str] = []
+        n_seg = 0
+        for seg in segs:
+            if any(w in rubric for w in words):
+                # 细则自己用过的词放行（细则里的词是教师认可的，不算跑题）
                 continue
-            if w in answer:
-                hits.append(w)
-        if hits:
-            problems.append(
-                f"方向红线：{why.get(key, '题目问的方向')}，"
-                f"答案里却出现了「{'」「'.join(hits[:5])}」这类不该有的词"
-            )
+            hit_words = [w for w in words if w in seg]
+            if hit_words:
+                n_seg += 1
+                if len(hit_segs) < 5:
+                    hit_segs.append(f"{seg.strip()[:30]}（{'／'.join(hit_words[:3])}）")
+        if not n_seg:
+            continue
+        if n_seg <= allowed:
+            # 在配额之内 → 这是故意注入的错误，放过
+            continue
+        problems.append(
+            f"方向红线：{why.get(key, '题目问的方向')}，"
+            f"答案里有 {n_seg} 处出现了「{'」「'.join(hit_segs[:3])}」"
+            f"这类不该有的词（这一档只允许 {allowed} 处）"
+        )
     return problems
 
 
