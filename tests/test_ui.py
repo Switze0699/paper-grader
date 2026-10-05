@@ -143,6 +143,18 @@ def main() -> None:
     setup.render(app)
     check("无题目时能显示开始卡片", app.rendered is not None and len(app.rendered) >= 1)
 
+    # ⚠ 回归（2026-10-05 实测崩溃）：刚打开程序、还没抽过题时，
+    #   点首页的「刷新题库（同步新加的题）」会调 _refresh()，
+    #   它以前直接 q.points → NoneType has no attribute 'points'。
+    #   （题目其实同步成功了，只是刷新界面这一步炸了。）
+    app.state["question"] = None
+    try:
+        setup._refresh(app)
+        check("无题目时点「刷新题库」不再崩溃（q 为 None 也能刷新）", True)
+    except AttributeError as e:
+        check("无题目时点「刷新题库」不再崩溃（q 为 None 也能刷新）",
+              False, str(e))
+
     app.state["question"] = _fake_paper()["question"]
     setup.render(app)
     check("有题目时能显示细则编辑区",

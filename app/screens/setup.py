@@ -582,6 +582,14 @@ def _sync_fields(app) -> None:
 def _refresh(app) -> None:
     st = app.state
     q = st["question"]
+    # ⚠ 2026-10-05 修：这里以前直接 q.points，没抽过题时 q 是 None 会当场崩。
+    #   实测踩过：刚打开程序（st["question"] 还是 None）就点首页的
+    #   「刷新题库（同步新加的题）」→ AttributeError: 'NoneType' object has no
+    #   attribute 'points'。题目同步其实是成功的，只是刷新界面这一步炸了。
+    #   没有题目时不需要构建采分点编辑框，直接交给 render（它自己会走首页分支）。
+    if q is None:
+        render(app)
+        return
     fields = []
     for p in q.points:
         fields.append(
