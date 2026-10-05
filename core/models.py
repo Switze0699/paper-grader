@@ -92,6 +92,14 @@ class StudentPlan:
     #     会把故意写的错误"修"掉，白烧额度还压不下得分率。
     wrong_kinds: List[str] = field(default_factory=list)
 
+    # ⚠ 2026-10-05 新增：来自考生档案库的【人设描述】（student_profiles.json）。
+    #   与上面的 wrong_kinds 是【叠加】关系，不是替代：
+    #     · role_hint  —— 回答"这个人是谁"（知识水平、答题习惯、错在哪、自己看不看得出）
+    #     · wrong_kinds —— 回答"第几条写成什么错"（由 planner._wrong_instruction 点名）
+    #   实测：只喂 role_hint 时 AI 会五条全写对，错误一条都注入不进去。
+    #   为 None / 空串时，生成端完全退回原来的 student_role() 行为，老流程零影响。
+    role_hint: str = ""
+
 
 @dataclass
 class Student:

@@ -68,7 +68,19 @@ hiddenimports = [
     #   core.qbank_parse / storage.repository / storage.db 一整条链，
     #   少一个就是点按钮时报 ModuleNotFoundError，所以这里全列上。
     "core.qbank_import",
+    # ⚠ 2026-10-05：新增 core.profiles（60 人考生档案库）。
+    #   ⚠⚠ core/pipeline.py 里是【try 块内动态 import】的
+    #   （from core import profiles as profile_lib），
+    #   PyInstaller 的静态分析【扫不到 try 里的 import】——
+    #   不写在这里，打包后一跑就是 ModuleNotFoundError。
+    "core.profiles",
 ]
+
+# ⚠ 考生档案库是【数据文件】，不是代码——必须一起打进去。
+#   不打的话，用户双击 exe 时读不到 student_profiles.json，
+#   程序会静默退回"按权重随机分组"（不报错，但档案库等于没生效）。
+if os.path.exists(os.path.join(ROOT, "student_profiles.json")):
+    datas.append((os.path.join(ROOT, "student_profiles.json"), "."))
 
 # 把 flet 系列包的数据文件（Flutter 运行时等）全部带上
 for pkg in ("flet", "flet_desktop", "flet_web"):

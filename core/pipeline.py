@@ -38,8 +38,32 @@ async def build_class(
     blank_rate = float(cfg["classroom"].get("blank_rate", 0.0))
     count = int(cfg["classroom"].get("students", 40))
 
+    # ★ 2026-10-05 新增：优先从考生档案库抽人（60 人库，按档位比例抽）。
+    #   档案带 role_hint（人设）和 error_tendencies（错误类型），
+    #   跟 planner 的点名指令【叠加】使用。
+    #   ⚠ 抽不到（文件缺失/损坏/库为空）就返回 []，
+    #     下面 make_plans 走原有的"按 weights 随机抽"逻辑，程序照常跑。
+    picks: List[dict] = []
+    plan_profiles: Optional[List[dict]] = None
+    try:
+        from core import profiles as profile_lib
+
+        picks = profile_lib.pick_profiles(count)
+        if picks:
+            plan_profiles = profile_lib.to_plan_kwargs(picks)
+    except Exception as e:  # noqa: BLE001
+        log.error("考生档案库抽样失败：%s（退回随机分组）", e)
+        plan_profiles = None
+
+    if picks:
+        log.info("从考生档案库抽了 %s 份：%s", len(picks),
+                 [p.get("id") for p in picks])
+    else:
+        log.info("没有可用档案，按权重随机分组")
+
     plans: List[StudentPlan] = make_plans(
-        question, count, weights, blank_rate, style_weights
+        question, count, weights, blank_rate, style_weights,
+        profiles=plan_profiles,
     )
     client = LLMClient(cfg, api_key)
     try:

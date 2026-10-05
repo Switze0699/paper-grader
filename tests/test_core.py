@@ -1292,6 +1292,110 @@ def test_material_reaches_everyone():
           _material_of(old) == "【材料】某河段位于湿润山区。", repr(_material_of(old)))
 
 
+def test_profile_library():
+    """考生档案库接入（2026-10-05）——守住三条易碎的东西。"""
+    from core import profiles as pm
+    from core.planner import WRONG_KINDS, student_role
+
+    allp = pm.load_profiles()
+    check("档案库能读到 60 份", len(allp) == 60, f"实际 {len(allp)}")
+
+    # ---- 1. 抽样配额：抽 8 份时五档都要露面 ----
+    q8 = pm.quota_for(8, allp)
+    check("抽 8 份配额合计正好 8", sum(q8.values()) == 8, str(q8))
+    check("抽 8 份时优秀档抽得到（纯按比例取整会把尖子生全漏掉）",
+          q8.get("优秀", 0) >= 1, str(q8))
+    check("抽 8 份时良好档抽得到", q8.get("良好", 0) >= 1, str(q8))
+    check("中等档是抽取的主力（最多）",
+          q8.get("中等", 0) == max(q8.values()), str(q8))
+
+    # 跑 30 次，份数必须次次是 8、档位不越界
+    from collections import Counter
+    cnt = Counter()
+    ok_n = True
+    for _ in range(30):
+        ps = pm.pick_profiles(8)
+        if len(ps) != 8:
+            ok_n = False
+        for p in ps:
+            cnt[p["level"]] += 1
+    check("抽 30 次每次都是 8 份（不因取整而少人）", ok_n)
+    check("攒 240 份里五档都出现过", set(cnt) == set(pm.LEVELS), str(sorted(cnt)))
+
+    # ---- 2. ★ 错误类型必须跟档案声明【对齐】（不能现抽） ----
+    picks = [p for p in allp if p["id"] in (22, 57)]
+    check("能按 id 取到 #22 / #57", len(picks) == 2)
+    plans = make_plans(None or _fake_question(), len(picks),
+                       weights={}, profiles=pm.to_plan_kwargs(picks))
+    for prof, plan in zip(picks, plans):
+        want = [k for k in (prof.get("error_tendencies") or [])
+                if k in WRONG_KINDS]
+        check(f"档案 #{prof['id']} 的错误类型原样进了 plan",
+              plan.wrong_kinds == want, f"{plan.wrong_kinds} vs {want}")
+        check(f"档案 #{prof['id']} 的 role_hint 原样进了 plan",
+              plan.role_hint == prof["role_hint"])
+        check(f"档案 #{prof['id']} 的档位进了 plan",
+              plan.ability == prof["level"])
+
+    # "漏点 / 堆材料"是卷面形态，不该混进"写错的 N 条"
+    loose = [p for p in allp if set(p["error_tendencies"]) & {"漏点", "堆材料"}]
+    check("存在带漏点/堆材料的档案（用例有效性）", len(loose) > 0)
+    lp = make_plans(_fake_question(), len(loose),
+                    weights={}, profiles=pm.to_plan_kwargs(loose))
+    check("漏点/堆材料没有被当成『某一条写错』塞进 wrong_kinds",
+          all(k in WRONG_KINDS for plan in lp for k in plan.wrong_kinds),
+          str([p.wrong_kinds for p in lp][:3]))
+
+    # ---- 3. ★★ 接入方式必须是【叠加】：点名指令 + 人物设定 同时出现 ----
+    prof = picks[1]                      # #57 很差档，错误最多，最能看出叠加
+    plan = plans[1]
+    role = student_role(plan.ability, plan.style, plan.wrong_kinds,
+                        n_lines=5, role_hint=plan.role_hint)
+    check("提示词里有档案的人设（【人物设定】段）", "【人物设定】" in role)
+    check("提示词里的人设就是档案原文", plan.role_hint in role)
+    check("★ 提示词里同时有点名改错的硬指令（叠加，不是二选一）",
+          "点名改错" in role and "第 " in role)
+    check("错误指令排在人物设定【前面】（放后面 AI 会无视）",
+          role.index("点名改错") < role.index("【人物设定】"))
+
+    # ---- 4. 不传档案时，必须完全退回旧行为 ----
+    old = student_role("中等", "浮于表面型", ["张冠李戴"], n_lines=5)
+    check("不传 role_hint 时仍走 ROLE_PROMPTS（老流程零影响）",
+          "浮于表面型" in old and "点名改错" in old)
+    plain = student_role("优秀", "", [], n_lines=5, role_hint="")
+    check("无错误 + 无人设时返回纯档位提示词", "地理" in plain or len(plain) > 0)
+
+    # ---- 5. 档案文件损坏 / 缺失时必须不崩 ----
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        check("档案文件不存在时返回空列表（不抛异常）",
+              pm.load_profiles(Path(td)) == [])
+        bad = Path(td) / "student_profiles.json"
+        bad.write_text("{ 这不是合法 json", encoding="utf-8")
+        check("档案文件损坏时返回空列表（不崩）",
+              pm.load_profiles(Path(td)) == [])
+        bad.write_text('{"profiles": [{"id": 1, "level": "不存在的档"}]}',
+                       encoding="utf-8")
+        check("档位不认识的档案被跳过",
+              pm.load_profiles(Path(td)) == [])
+
+
+def _fake_question():
+    """造一道 3 个采分点的假题（不联网、不读库）。"""
+    return Question(
+        subject="地理",
+        topic="岩石与地貌",
+        stem="推测流纹岩的形成过程。",
+        material="【材料】黑排角岩滩……",
+        max_score=6.0,
+        points=[
+            RubricPoint(seq=1, text="岩浆沿断裂带喷出地表", score=2.0),
+            RubricPoint(seq=2, text="迅速冷却凝固形成流纹岩", score=2.0),
+            RubricPoint(seq=3, text="地壳抬升、外力侵蚀使岩石出露", score=2.0),
+        ],
+    )
+
+
 def main() -> None:
     print("=" * 46)
     print(" 批改模拟器 · 核心逻辑自测")
@@ -1311,6 +1415,7 @@ def main() -> None:
     test_spare_points_do_not_inflate()
     test_material_leak_guard()
     test_material_reaches_everyone()
+    test_profile_library()
     print("\n" + "=" * 46)
     if FAILED:
         print(f" 有 {len(FAILED)} 项未通过：")

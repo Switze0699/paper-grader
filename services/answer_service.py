@@ -59,8 +59,11 @@ def build_student_block(question: Question, plan: StudentPlan) -> str:
     #   现抽的话，生成用的和下面质量闸门用的会是两个不同名单。
     # n_lines 传"预计写几条"，用来给错误分配具体条号（从第 2 条起铺开）——
     #   实测：只说"有一处会答错"AI 不听，必须点名"第3 条写成张冠李戴"。
+    # ★ 2026-10-05 第二轮：role_hint（来自考生档案库）当【人物设定】传进去，
+    #   错误指令仍由 planner 点名条号生成——两者【叠加】，谁也不替谁。
+    #   实测只喂 role_hint 时 AI 五条全写对，一条错误都注入不进去。
     role = student_role(plan.ability, plan.style, plan.wrong_kinds,
-                        (lo_l + hi_l) // 2)
+                        (lo_l + hi_l) // 2, role_hint=plan.role_hint)
     return (
         f"学生编号：{plan.seq}\n"
         f"水平：{plan.ability}\n"

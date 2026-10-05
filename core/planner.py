@@ -381,7 +381,7 @@ STYLE_TRAITS: Dict[str, str] = {
 
 def student_role(
     ability: str, style: str = "", wrong_kinds: Optional[List[str]] = None,
-    n_lines: Optional[int] = None,
+    n_lines: Optional[int] = None, role_hint: str = "",
 ) -> str:
     """把档位 + 画像 + 错误配额翻译成给 AI 的角色提示词。
 
@@ -393,6 +393,15 @@ def student_role(
       最后一段要单独成段，AI 才知道这是本次的额外要求，
       而不是它自己性格的一部分。
 
+    ★★ 2026-10-05 第二轮：role_hint 来自考生档案库，与错误指令【叠加】★★
+      用户定的接入方式：
+        · 档案 role_hint 负责"这个人是谁"（背景、习惯、错在哪）
+        · planner 的点名指令负责"第几条写成什么错"
+      两者缺一不可——实测只喂 role_hint 时 AI 五条全写对，错误一条都进不去；
+      只喂点名指令时人物没有个性，一份份长得一个样。
+      ⚠ role_hint 为空 → 完全退回旧行为（用 ROLE_PROMPTS + STYLE_TRAITS），
+        老流程和测试零影响。
+
     ★★ 为什么要指定【具体条号】★★
       实测（第 53 份）：只在提示词里说"你这次有 1 处会答错"，
       AI 写出来的 6 条**全是对的**——它天生倾向交一份好卷子，
@@ -401,8 +410,14 @@ def student_role(
       这跟"抽点限制作答范围"是同一个思路：
       **不给死条号，它就每条都写成满分答案。**
     """
-    role = ROLE_PROMPTS.get(ability, ROLE_PROMPTS["中等"])
-    trait = STYLE_TRAITS.get(style, "")
+    # 人物设定：优先用档案给的 role_hint，其次是"档位提示词 + 答题习惯"
+    if role_hint:
+        tail = role_hint
+    else:
+        tail = ROLE_PROMPTS.get(ability, ROLE_PROMPTS["中等"])
+        trait = STYLE_TRAITS.get(style, "")
+        if trait:
+            tail += f" 你的答题习惯（{style}）：{trait}"
 
     kinds = wrong_kinds if wrong_kinds is not None else pick_wrong_kinds(ability)
     # ★★顺序很关键：错误指令放【最前面】★★
@@ -411,14 +426,9 @@ def student_role(
     #   之后命中率明显上升。
     #   人物设定反而可以放后面，它只是背景，不是本次的重点。
     if kinds:
-        tail = f"{role}"
-        if trait:
-            tail += f" 你的答题习惯（{style}）：{trait}"
         return f"{_wrong_instruction(kinds, n_lines)}\n【人物设定】{tail}"
 
-    if trait:
-        return f"{role} 你的答题习惯（{style}）：{trait}"
-    return role
+    return tail
 
 
 def _wrong_instruction(kinds: List[str], n_lines: Optional[int] = None) -> str:
@@ -658,16 +668,45 @@ def make_plans(
     weights: Dict[str, float],
     blank_rate: float = 0.0,
     style_weights: Dict[str, float] | None = None,
+    profiles: Optional[List[dict]] = None,
 ) -> List[StudentPlan]:
-    """为一整批学生生成"设计档位"和"错误画像"。"""
+    """为一整批学生生成"设计档位"和"错误画像"。
+
+    ★ 2026-10-05 新增 profiles（考生档案库抽出来的那几份，见 student_profiles.json）
+      传了 profiles 时：
+        · ability / style 从档案取，不再按 weights 现抽
+        · wrong_kinds 用档案的 error_tendencies（**只保留可注入的三类**，
+          漏点/堆材料是卷面形态，不算"某一条写错"），不再由 pick_wrong_kinds 现抽
+        · role_hint 原样存进 plan，生成时当人物设定用
+      不传 profiles 时，行为跟以前一模一样（老流程、测试零影响）。
+
+    ⚠ 为什么错误类型必须来自档案而不是现抽：
+      档案的 role_hint 里写着"你会犯因果颠倒"，如果 wrong_kinds 是现抽的，
+      点名到"第 3 条"的错误可能跟档案说的不是同一类——
+      于是提示词自相矛盾，AI 只能挑一个听，实测落地率很低。
+    """
     scores = {p.seq: p.score for p in question.points}
     n = len(question.points)
     score_list = [p.score for p in question.points]
     plans: List[StudentPlan] = []
+    pool = list(profiles) if profiles else []
 
     for i in range(count):
-        ability = pick_ability(weights)
-        style = pick_style(ability, style_weights)
+        prof = pool[i] if i < len(pool) else None
+
+        if prof:
+            ability = prof.get("level") or pick_ability(weights)
+            style = prof.get("style") or ""
+            role_hint = prof.get("role_hint") or ""
+            # 只取可注入的三类；漏点/堆材料走"卷面形态"，不进错误条数配额
+            kinds = [k for k in (prof.get("error_tendencies") or [])
+                     if k in WRONG_KINDS]
+        else:
+            ability = pick_ability(weights)
+            style = pick_style(ability, style_weights)
+            role_hint = ""
+            kinds = None      # None = 交给 student_role 现抽（旧行为）
+
         hit, partial, off, blank = split_points(
             n, ability, blank_rate, score_list, question.max_score
         )
@@ -702,7 +741,10 @@ def make_plans(
                 # ★ 这一份故意要犯哪几类错（2026-10-05 新增）。
                 #   抽一次就存下来，生成和闸门共用同一份名单——
                 #   闸门据此放行"故意的答非所问"，否则会把它当硬伤打回。
-                wrong_kinds=pick_wrong_kinds(ability),
+                #   有档案时用档案的 error_tendencies，没有时现抽。
+                wrong_kinds=kinds if kinds is not None else pick_wrong_kinds(ability),
+                # ★ 档案的人设，跟 wrong_kinds 叠加使用（不是替代）
+                role_hint=role_hint,
             )
         )
     return plans
